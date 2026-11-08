@@ -22,7 +22,8 @@ Claude Code: use the **default** for each item, mark code with `// OPEN(OD-x)`, 
 | OD-13 | Where the agent service runs during the demo | A teammate's laptop | Stage 6 |
 | OD-14 | Final color values and app icon | Tokens in [[09 Design System]] | UI teammate |
 | OD-15 | Existing savings earmarked for goals | Goals start at $0 balance | Stage 3 |
-| OD-16 | Third Devpost track | NVIDIA (Photon only if stronger) | Before submission |
+| OD-16 | Third Devpost track | **Unresolved.** [[07 Agent Spec]] moved to Gemini-only, which forfeits NVIDIA. Photon is the likely replacement — see [[17 Stage 8 Handoff]] | Before submission |
 | OD-17 | Rounding ties on negative money | Half away from zero, so `toCents(-x) === -toCents(x)` — see [[15 Money and Rounding]] | Before Stage 1 goldens settle |
 | OD-18 | Dev and demo platform | Expo web on a laptop for development; phone via Expo Go deferred — see [[16 Dev Environment]] | Before Stage 7 (V6 needs two devices) |
+| OD-20 | Which model provider the demo uses | Gemini `gemini-3.8-flash`, fallback `gemini-3.5-flash-lite`, per [[07 Agent Spec]]. Nemotron removed | Settled 2026-11-08 |
 | OD-19 | How the agent's shared secret is supplied | A module constant in `server/spacetime/src/agent-secret.ts`, committed with a dev value | Before any deploy that isn't local |

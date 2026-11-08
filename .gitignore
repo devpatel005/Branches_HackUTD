@@ -52,3 +52,9 @@ spacetime.local.json
 # Agent prompt logs (development only)
 services/agent/.agent-prompts*.log
 scripts/verify/.agent-prompts*.log
+
+# Credentials kept in the vault. Never commit.
+Creds.md
+creds.md
+CREDS.md
+**/Creds.md

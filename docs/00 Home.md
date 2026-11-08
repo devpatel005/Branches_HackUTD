@@ -24,6 +24,7 @@ Start here. Claude Code reads [[CLAUDE]] first, then the current stage.
 | [[14 Research Notes]] | Condensed findings from team research, with flags |
 | [[15 Money and Rounding]] | How dollars become cents, and the one tie-breaking rule still open |
 | [[16 Dev Environment]] | How we run it while building: platform, hosts, firewall, toolchain |
+| [[17 Stage 8 Handoff]] | Working notes for the Stage 8 session: scope, the Gemini change, gotchas |
 
 ## Build stages
 | Stage | Outcome |
@@ -42,5 +43,7 @@ Start here. Claude Code reads [[CLAUDE]] first, then the current stage.
 ## Tracks
 - **PNC** (main): "360° Financial Health Navigator"
 - **SpacetimeDB**: core logic and real-time sync run on SpacetimeDB
-- **NVIDIA**: Nemotron is the agent's primary model
-- *Photon is a stretch goal and would replace one track only if it's stronger.*
+- **NVIDIA**: ~~Nemotron is the agent's primary model~~ — **retired.** [[07 Agent Spec]] now
+  specifies Gemini as the only model, which forfeits this track. The third track
+  is unresolved: see OD-16 in [[13 Open Decisions]].
+- *Photon is a stretch goal and is now the most likely third track.*
