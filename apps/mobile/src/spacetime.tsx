@@ -15,6 +15,22 @@ export function useIdentity(): IdentityState {
   return useContext(IdentityContext);
 }
 
+type ConnectionTrouble = { error: string | null; host: string };
+
+const ConnectionContext = createContext<ConnectionTrouble>({ error: null, host: '' });
+
+/**
+ * Why the screen is still empty, if the reason is the connection.
+ *
+ * The SDK's connect error used to go only to `console.warn`, which is perfect
+ * for whoever is running the dev server and useless to anyone looking at the
+ * app: every screen that waits on a row rendered a spinner with no explanation
+ * and no way forward. `Loading` reads this so the dead end explains itself.
+ */
+export function useConnectionTrouble(): ConnectionTrouble {
+  return useContext(ConnectionContext);
+}
+
 /**
  * Builds the connection once the stored token has been read.
  *
@@ -29,6 +45,7 @@ export function BranchesSpacetimeProvider({ children }: { children: React.ReactN
     identity: null,
     reusedToken: false,
   });
+  const [connectError, setConnectError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +71,7 @@ export function BranchesSpacetimeProvider({ children }: { children: React.ReactN
       .withAutomaticReconnect()
       .onConnect((_conn, identity, newToken) => {
         void saveToken(newToken);
+        setConnectError(null);
         setIdentityState({ identity, reusedToken: hadToken });
       })
       .onConnectError((_ctx, error) => {
@@ -68,15 +86,21 @@ export function BranchesSpacetimeProvider({ children }: { children: React.ReactN
             '    incoming connections for spacetimedb-standalone), or use Maincloud.\n' +
             '  - EXPO_PUBLIC_* vars are inlined at bundle time: restart Expo after editing .env.'
         );
+        // Also on screen, not only in the console — see `useConnectionTrouble`.
+        setConnectError(error.message || 'the connection was refused');
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tokenLoaded]);
 
   if (!connectionBuilder) return null;
 
+  const { host } = resolveHost(Platform.OS);
+
   return (
     <IdentityContext.Provider value={identityState}>
-      <SpacetimeDBProvider connectionBuilder={connectionBuilder}>{children}</SpacetimeDBProvider>
+      <ConnectionContext.Provider value={{ error: connectError, host }}>
+        <SpacetimeDBProvider connectionBuilder={connectionBuilder}>{children}</SpacetimeDBProvider>
+      </ConnectionContext.Provider>
     </IdentityContext.Provider>
   );
 }

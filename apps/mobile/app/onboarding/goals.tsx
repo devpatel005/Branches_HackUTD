@@ -8,6 +8,7 @@ import {
   Body,
   Button,
   Caption,
+  Loading,
   Notice,
   Row,
   Screen,
@@ -39,7 +40,10 @@ export default function GoalsScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (!household) return null;
+  // Never-stuck (Stage 8): this was a bare `return null`, which renders an
+  // empty screen mid-onboarding with nothing to read and nothing to tap.
+  // `Loading` explains itself after a few seconds and offers a reload.
+  if (!household) return <Loading label="Opening your plan…" />;
 
   return (
     <Screen>

@@ -1111,6 +1111,197 @@ async function rejects(call: () => Promise<void>): Promise<boolean> {
   }
 }
 
+// ======================================================================
+// 15. Reducer hardening — Stage 8
+// ======================================================================
+/**
+ * Every reducer argument has a bound, and the bound is enforced server-side.
+ *
+ * The reducers were already careful about *who* and *which enum*; they were not
+ * careful about *how big*. An argument goes straight into a row, and
+ * `household`, `member`, `goal` and `chat_message` are public — so an unbounded
+ * string is not one client's problem, it is a row every subscriber downloads.
+ *
+ * Two policies, asserted separately because they differ on purpose: free text
+ * is truncated (a clipped name never interrupts anyone), money is rejected
+ * (silently clamping somebody's figure would build the plan on a number they
+ * never typed).
+ */
+const HUGE = 'x'.repeat(20000);
+
+// Its own goal, not the Japan/House fixture: section 14's reseed deletes every
+// goal, so anything created earlier is gone by the time this runs.
+await a.conn.reducers.addGoal({
+  title: 'Hardening',
+  icon: 'star',
+  costTodayCents: 123400,
+  targetMonth: 30,
+  priority: 'flex',
+});
+const goalForEdits = await waitFor('the hardening goal', () =>
+  mine.goals(a).find(g => g.title === 'Hardening')
+);
+
+// --- Money at the domain edges ---
+checks.push(
+  check(
+    'H1',
+    'a goal cost above the ceiling is rejected, not clamped',
+    await rejects(() =>
+      a.conn.reducers.addGoal({
+        title: 'Absurd',
+        icon: 'star',
+        costTodayCents: 2_000_000_000,
+        targetMonth: 12,
+        priority: 'flex',
+      })
+    ),
+    true
+  ),
+  check(
+    'H2',
+    'a negative fun-money amount is rejected',
+    await rejects(() => a.conn.reducers.setFunMoney({ monthlyCents: -1 })),
+    true
+  ),
+  check(
+    'H3',
+    'an absurd fun-money amount is rejected too — the old check only had a floor',
+    await rejects(() => a.conn.reducers.setFunMoney({ monthlyCents: 2_000_000_000 })),
+    true
+  ),
+  check(
+    'H4',
+    'an affordability check above the ceiling is rejected',
+    await rejects(() => a.conn.reducers.checkAffordability({ amountCents: 2_000_000_000, label: 'a yacht' })),
+    true
+  ),
+  check(
+    'H5',
+    'an item edited to an absurd amount is rejected',
+    await rejects(() => a.conn.reducers.editItem({ itemId: itemsSeenByA[0]!.id, monthlyCents: 2_000_000_000 })),
+    true
+  )
+);
+
+// --- Oversized free text is stored truncated, and the call still succeeds ---
+await a.conn.reducers.setDisplayName({ displayName: HUGE });
+await waitFor('the truncated name to land', () =>
+  (rows.members(a).find(m => m.id === memberA.id)?.displayName.length ?? 0) > 0 &&
+  (rows.members(a).find(m => m.id === memberA.id)?.displayName.length ?? 0) < 100
+    ? true
+    : undefined
+);
+const storedName = rows.members(a).find(m => m.id === memberA.id)!.displayName;
+
+await a.conn.reducers.editGoal({
+  goalId: goalForEdits.id,
+  title: HUGE,
+  costTodayCents: goalForEdits.costTodayCents,
+  targetMonth: goalForEdits.targetMonth,
+  priority: goalForEdits.priority,
+});
+await waitFor('the truncated goal title to land', () => {
+  const title = mine.goals(a).find(g => g.id === goalForEdits.id)?.title;
+  return title !== undefined && title.length < 100 ? true : undefined;
+});
+const storedTitle = mine.goals(a).find(g => g.id === goalForEdits.id)!.title;
+
+checks.push(
+  check('H6', 'a 20,000-character display name is truncated, not stored whole', storedName.length <= 40, true),
+  check('H7', 'and the reducer still succeeded rather than erroring at the user', storedName.length > 0, true),
+  check('H8', 'a 20,000-character goal title is truncated', storedTitle.length <= 60, true)
+);
+
+// Put the fixture back, so later assertions and reruns see the real values.
+await a.conn.reducers.setDisplayName({ displayName: memberA.displayName });
+await a.conn.reducers.editGoal({
+  goalId: goalForEdits.id,
+  title: goalForEdits.title,
+  costTodayCents: goalForEdits.costTodayCents,
+  targetMonth: goalForEdits.targetMonth,
+  priority: goalForEdits.priority,
+});
+
+// --- Bad ids and oversized payloads ---
+checks.push(
+  check(
+    'H9',
+    'an unknown goal id is rejected rather than creating one',
+    await rejects(() =>
+      a.conn.reducers.editGoal({
+        goalId: 999_999_999n,
+        title: 'Ghost',
+        costTodayCents: 100000,
+        targetMonth: 12,
+        priority: 'flex',
+      })
+    ),
+    true
+  ),
+  check(
+    'H10',
+    'an unknown item id is rejected',
+    await rejects(() => a.conn.reducers.editItem({ itemId: 999_999_999n, monthlyCents: 1000 })),
+    true
+  ),
+  check(
+    'H11',
+    'an unknown event id is rejected',
+    await rejects(() => a.conn.reducers.computeImpact({ eventId: 999_999_999n })),
+    true
+  ),
+  check(
+    'H12',
+    'an unknown session id is rejected',
+    await rejects(() => a.conn.reducers.generateCandidates({ sessionId: 999_999_999n })),
+    true
+  ),
+  check(
+    'H13',
+    'a stale session id cannot be readied',
+    await rejects(() => a.conn.reducers.setReady({ sessionId: 999_999_999n, ready: true })),
+    true
+  ),
+  check(
+    'H14',
+    'an unknown template is rejected rather than stored',
+    await rejects(() => a.conn.reducers.createEvent({ templateId: HUGE, params: [] })),
+    true
+  ),
+  check(
+    'H15',
+    'an oversized message is rejected',
+    await rejects(() => a.conn.reducers.sendMessage({ text: HUGE })),
+    true
+  ),
+  check(
+    'H16',
+    'an unknown profile cannot be seeded',
+    await rejects(() => a.conn.reducers.seedMockData({ profileId: 'not-a-profile' })),
+    true
+  ),
+  check(
+    'H17',
+    'an empty name is rejected, since a blank avatar is worse than a clipped one',
+    await rejects(() => a.conn.reducers.setDisplayName({ displayName: '   ' })),
+    true
+  )
+);
+
+// --- A flood of event parameters must not reach the engine as-is ---
+// `parseParams` validates meaning, not volume; the entry cap is what keeps a
+// thousand-entry array from becoming its problem.
+const manyParams = Array.from({ length: 500 }, (_, i) => ({ key: `k${i}`, value: String(i) }));
+checks.push(
+  check(
+    'H18',
+    'hundreds of event parameters are rejected for their content, not accepted wholesale',
+    await rejects(() => a.conn.reducers.createEvent({ templateId: 'baby', params: manyParams })),
+    true
+  )
+);
+
 const ok = printTable('V4 Data flow — Stage 2 (household, inference, onboarding)', checks);
 a.conn.disconnect();
 b.conn.disconnect();

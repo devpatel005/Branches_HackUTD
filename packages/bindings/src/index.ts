@@ -63,6 +63,7 @@ import LeaveSessionReducer from "./leave_session_reducer.ts";
 import NameBranchReducer from "./name_branch_reducer.ts";
 import PostAgentMessageReducer from "./post_agent_message_reducer.ts";
 import ReactReducer from "./react_reducer.ts";
+import ReclaimJobsReducer from "./reclaim_jobs_reducer.ts";
 import RegisterAgentReducer from "./register_agent_reducer.ts";
 import RejectItemReducer from "./reject_item_reducer.ts";
 import RemoveConstraintReducer from "./remove_constraint_reducer.ts";
@@ -469,6 +470,7 @@ const reducersSchema = __reducers(
   __reducerSchema("name_branch", NameBranchReducer),
   __reducerSchema("post_agent_message", PostAgentMessageReducer),
   __reducerSchema("react", ReactReducer),
+  __reducerSchema("reclaim_jobs", ReclaimJobsReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("reject_item", RejectItemReducer),
   __reducerSchema("remove_constraint", RemoveConstraintReducer),

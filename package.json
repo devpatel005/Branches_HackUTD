@@ -35,6 +35,7 @@
     "verify:flow": "npm run -w @branches/verify verify:flow",
     "agent:mock": "npm run -w @branches/agent mock",
     "verify:agent": "npm run -w @branches/verify verify:agent",
+    "verify:screens": "npm run -w @branches/verify verify:screens",
     "verify:agent:e2e": "npm run -w @branches/verify verify:agent:e2e",
     "verify:ready": "npm run -w @branches/verify verify:ready"
   }

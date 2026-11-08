@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { Platform, View, StyleSheet } from 'react-native';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
 import {
@@ -11,6 +11,7 @@ import {
   Hero,
   Notice,
   Screen,
+  SectionHeader,
   Title,
 } from '../src/components';
 import { useHousehold, useHouseholdMembers, useMe, memberColor } from '../src/household';
@@ -120,9 +121,23 @@ export default function WelcomeScreen() {
   );
 }
 
-/** The code, large, with the partner's avatar appearing live when they join. */
+/**
+ * The code, large, with the partner's avatar appearing live when they join.
+ *
+ * Never-stuck (Stage 8): this screen used to offer nothing but waiting. If the
+ * partner never arrives — or the name was a typo, or there is only one person
+ * and one laptop — there was no action on screen and no way back, because
+ * `createHousehold` refuses once you are already a member. So it now says why
+ * two people are needed, lets the name be fixed in place, and points at the
+ * second-identity trick that actually unblocks a single browser.
+ */
 function WaitingForPartner({ code }: { code: string }) {
   const members = useHouseholdMembers();
+  const { me } = useMe();
+  const setDisplayName = useReducer(reducers.setDisplayName);
+  const [rename, setRename] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
   return (
     <Screen>
       <Hero value={code} caption="Your join code" />
@@ -141,6 +156,46 @@ function WaitingForPartner({ code }: { code: string }) {
         <View style={styles.avatarPlaceholder} />
       </View>
       <Caption>Waiting for your partner…</Caption>
+
+      <Caption>
+        Branches plans for two, so the shared baseline needs both of you before it can be
+        built. Nothing is lost while you wait — the code stays the same.
+      </Caption>
+
+      {/*
+        The documented way to get a second identity on one machine
+        (16 Dev Environment): AsyncStorage on web *is* localStorage, which is
+        per-origin and not per-tab, so a plain second tab joins as the same
+        person.
+      */}
+      {Platform.OS === 'web' ? (
+        <Caption>
+          Testing alone? Open a second tab at /?device=b and enter {code} there — that tab
+          gets its own identity.
+        </Caption>
+      ) : null}
+
+      <SectionHeader>Fix your name</SectionHeader>
+      <Field
+        value={rename}
+        onChangeText={setRename}
+        placeholder={me?.displayName ?? 'Your name'}
+      />
+      <Button
+        label="Update name"
+        variant="secondary"
+        onPress={async () => {
+          setError(null);
+          if (!rename.trim()) return;
+          try {
+            await setDisplayName({ displayName: rename });
+            setRename('');
+          } catch (e) {
+            setError(messageOf(e));
+          }
+        }}
+      />
+      {error ? <Notice tone="warn">{error}</Notice> : null}
     </Screen>
   );
 }

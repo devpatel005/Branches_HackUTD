@@ -149,6 +149,78 @@ export const onboardingProgress = spacetimedb.anonymousView(
 );
 
 // ---------------------------------------------------------------------------
+// Input limits (Stage 8 hardening)
+// ---------------------------------------------------------------------------
+
+/**
+ * Every string and number a client can send has a bound.
+ *
+ * The reason is not malice. A reducer argument goes straight into a row, and
+ * `household`, `member`, `goal` and `chat_message` are all public tables — so an
+ * unbounded string is not one client's problem, it is a row every subscriber in
+ * the household downloads, forever. Nothing above validated length before this
+ * pass; ownership and enums were checked, size was not.
+ *
+ * Two different policies, deliberately:
+ *   - **Free text is truncated.** A clipped name is recoverable and never
+ *     interrupts what someone was doing.
+ *   - **Numbers are rejected.** Silently clamping somebody's money to a
+ *     different number is worse than refusing it, because the plan would then
+ *     be built on a figure they never typed.
+ */
+const MAX_DISPLAY_NAME = 40;
+const MAX_GOAL_TITLE = 60;
+const MAX_ICON = 8;
+const MAX_LABEL = 80;
+const MAX_GAP_ANSWER = 200;
+const MAX_PARAM_VALUE = 120;
+/** Every template's parameter count is in single figures; this is slack. */
+const MAX_PARAM_ENTRIES = 24;
+/** A constraint is a small JSON object; anything larger is not one. */
+const MAX_CONSTRAINT_JSON = 2000;
+/** A join code is 6 characters. */
+const MAX_JOIN_CODE = 16;
+
+/**
+ * $1,000,000 in cents.
+ *
+ * Below `i32` max ($21,474,836) with room to spare, so no amount that passes
+ * this can overflow the column it is stored in — and 120 months of compounding
+ * on it stays finite, which keeps `toCents` from throwing deep inside the
+ * engine where the only remaining signal is a reducer-wide failure.
+ */
+const MAX_MONEY_CENTS = 100_000_000;
+
+/** Truncate free text to a storable length. */
+function cap(value: string, max: number): string {
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+/** A trimmed, length-capped string. */
+function capTrim(value: string, max: number): string {
+  return cap(value.trim(), max);
+}
+
+/**
+ * Reject a money amount outside the plausible range.
+ *
+ * `Number.isFinite` is not redundant: `t.i32()` constrains the wire format, but
+ * these helpers are also reachable from values the engine or a JSON payload
+ * produced, where `NaN` is possible and would otherwise pass every `<`
+ * comparison silently.
+ */
+function requireMoneyCents(cents: number, field: string, min: number): number {
+  if (!Number.isFinite(cents) || !Number.isInteger(cents)) {
+    throw new SenderError(`${field} must be a whole number of cents`);
+  }
+  if (cents < min) throw new SenderError(`${field} cannot be below ${min / 100}`);
+  if (cents > MAX_MONEY_CENTS) {
+    throw new SenderError(`${field} must be at most $${MAX_MONEY_CENTS / 100}`);
+  }
+  return cents;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -379,7 +451,7 @@ export const createHousehold = spacetimedb.reducer(
       id: 0n,
       householdId: h.id,
       identity: ctx.sender,
-      displayName: displayName.trim() || 'Partner A',
+      displayName: capTrim(displayName, MAX_DISPLAY_NAME) || 'Partner A',
       colorKey: 'a',
       role: 'member',
       online: true,
@@ -402,7 +474,7 @@ export const joinHousehold = spacetimedb.reducer(
     if (ctx.db.member.identity.find(ctx.sender)) {
       throw new SenderError('you are already in a household');
     }
-    const h = ctx.db.household.joinCode.find(joinCode.trim().toUpperCase());
+    const h = ctx.db.household.joinCode.find(capTrim(joinCode, MAX_JOIN_CODE).toUpperCase());
     if (!h) throw new SenderError('no household with that code');
 
     const existing = [...ctx.db.member.householdId.filter(h.id)].filter(
@@ -416,7 +488,7 @@ export const joinHousehold = spacetimedb.reducer(
       id: 0n,
       householdId: h.id,
       identity: ctx.sender,
-      displayName: displayName.trim() || `Partner ${colorKey.toUpperCase()}`,
+      displayName: capTrim(displayName, MAX_DISPLAY_NAME) || `Partner ${colorKey.toUpperCase()}`,
       colorKey,
       role: 'member',
       online: true,
@@ -429,7 +501,7 @@ export const setDisplayName = spacetimedb.reducer(
   { displayName: t.string() },
   (ctx, { displayName }) => {
     const m = requireMember(ctx);
-    const name = displayName.trim();
+    const name = capTrim(displayName, MAX_DISPLAY_NAME);
     if (!name) throw new SenderError('a name cannot be empty');
     ctx.db.member.id.update({ ...m, displayName: name });
   }
@@ -604,7 +676,7 @@ export const editItem = spacetimedb.reducer(
   { itemId: t.u64(), monthlyCents: t.i32() },
   (ctx, { itemId, monthlyCents }) => {
     const { caller, item } = requireOwnItem(ctx, itemId);
-    if (monthlyCents < 0) throw new SenderError('an amount cannot be negative');
+    requireMoneyCents(monthlyCents, 'an amount', 0);
     ctx.db.inferredItem.id.update({ ...item, monthlyCents, status: 'edited' });
     recomputeBaseline(ctx, caller.householdId, caller.id);
   }
@@ -646,7 +718,7 @@ export const answerGap = spacetimedb.reducer(
       throw new SenderError(`answer must be one of: ${q.options.join(', ')}`);
     }
 
-    ctx.db.gapQuestion.id.update({ ...q, answer });
+    ctx.db.gapQuestion.id.update({ ...q, answer: capTrim(answer, MAX_GAP_ANSWER) });
 
     const engineQuestion: GapQuestion = {
       id: q.engineKey,
@@ -691,7 +763,7 @@ export const setFunMoney = spacetimedb.reducer(
   { monthlyCents: t.i32() },
   (ctx, { monthlyCents }) => {
     const caller = requireHuman(ctx);
-    if (monthlyCents < 0) throw new SenderError('fun money cannot be negative');
+    requireMoneyCents(monthlyCents, 'fun money', 0);
     const existing = ctx.db.funMoney.memberId.find(caller.id);
     if (existing) ctx.db.funMoney.memberId.update({ ...existing, monthlyCents });
     else
@@ -726,7 +798,7 @@ export const setFunMoneyStatus = spacetimedb.reducer(
     ctx.db.funMoney.memberId.update({
       ...existing,
       status,
-      carryoverCents: Math.max(0, carryoverCents),
+      carryoverCents: requireMoneyCents(Math.max(0, carryoverCents), 'carryover', 0),
     });
   }
 );
@@ -808,6 +880,22 @@ export const reseedHousehold = spacetimedb.reducer(ctx => {
 
 /** One key/value pair of an event parameter, as sent from a form or a chip. */
 const ParamEntry = t.object('ParamEntry', { key: t.string(), value: t.string() });
+
+/**
+ * Bound an incoming parameter list before the engine sees it.
+ *
+ * Both the human path (`createEvent`) and the agent path
+ * (`applyEventInterpretation`) feed this straight into `parseParams`, whose job
+ * is to validate *meaning* — it has no reason to also defend against a thousand
+ * entries or a megabyte value. Unknown keys are left for `parseParams` to
+ * reject, so the error a user sees still names the parameter.
+ */
+function safeParams(params: { key: string; value: string }[]): { key: string; value: string }[] {
+  return params.slice(0, MAX_PARAM_ENTRIES).map(entry => ({
+    key: capTrim(entry.key, MAX_PARAM_VALUE),
+    value: capTrim(entry.value, MAX_PARAM_VALUE),
+  }));
+}
 
 /**
  * Rebuild the engine's input for a household, so events and affordability go
@@ -982,7 +1070,9 @@ export const createEvent = spacetimedb.reducer(
       id: 0n,
       householdId: caller.householdId,
       templateId,
-      params: JSON.stringify(viaEngine(() => parseParams(templateId as LifeEventTemplateId, params))),
+      params: JSON.stringify(
+        viaEngine(() => parseParams(templateId as LifeEventTemplateId, safeParams(params)))
+      ),
       status: 'active',
       createdBy: caller.id,
       createdAt: ctx.timestamp,
@@ -1015,7 +1105,9 @@ export const answerEventParam = spacetimedb.reducer(
     const current = JSON.parse(event.params) as Record<string, unknown>;
     const merged = {
       ...current,
-      ...viaEngine(() => parseParams(event.templateId as LifeEventTemplateId, [{ key, value }])),
+      ...viaEngine(() =>
+        parseParams(event.templateId as LifeEventTemplateId, safeParams([{ key, value }]))
+      ),
     };
 
     // Promote the event once nothing is outstanding.
@@ -1135,18 +1227,20 @@ export const checkAffordability = spacetimedb.reducer(
   (ctx, { amountCents, label }) => {
     const caller = requireHuman(ctx);
     if (amountCents <= 0) throw new SenderError('enter an amount above zero');
+    requireMoneyCents(amountCents, 'an amount', 1);
+    const safeLabel = capTrim(label, MAX_LABEL);
 
     const input = simulationInputFor(ctx, caller.householdId);
     if (!input) throw new SenderError('finish onboarding first');
 
     const result = viaEngine(() =>
-      checkAffordabilityWithEngine(input, amountCents / 100, label.trim() || 'it')
+      checkAffordabilityWithEngine(input, amountCents / 100, safeLabel || 'it')
     );
 
     postMessage(ctx, caller.householdId, {
       kind: 'affordability',
       text: result.affordableWithoutChanges
-        ? `No goal changes for ${label.trim() || 'that'}.`
+        ? `No goal changes for ${safeLabel || 'that'}.`
         : `${result.newlyAtRiskGoalIds.length} goal${result.newlyAtRiskGoalIds.length === 1 ? '' : 's'} would stop fitting.`,
       authorMemberId: caller.id,
       payload: {
@@ -1236,6 +1330,7 @@ function queueJob(
     modelUsed: '',
     promptMessageId: job.promptMessageId,
     createdAt: ctx.timestamp,
+    claimedAt: undefined,
   });
   return row.id;
 }
@@ -1249,6 +1344,7 @@ const MAX_GOALS = 12;
 function validateGoal(title: string, costTodayCents: number, targetMonth: number, priority: string) {
   if (!title.trim()) throw new SenderError('a goal needs a name');
   if (costTodayCents <= 0) throw new SenderError('a goal needs a cost above zero');
+  requireMoneyCents(costTodayCents, 'a goal cost', 1);
   if (!Number.isInteger(targetMonth) || targetMonth < 1 || targetMonth > 120) {
     throw new SenderError('a target month must be between 1 and 120');
   }
@@ -1285,8 +1381,8 @@ export const addGoal = spacetimedb.reducer(
     ctx.db.goal.insert({
       id: 0n,
       householdId: caller.householdId,
-      title: title.trim(),
-      icon,
+      title: capTrim(title, MAX_GOAL_TITLE),
+      icon: cap(icon, MAX_ICON),
       costTodayCents,
       targetMonth,
       originalTargetMonth: targetMonth,
@@ -1318,7 +1414,7 @@ export const editGoal = spacetimedb.reducer(
 
     ctx.db.goal.id.update({
       ...existing,
-      title: title.trim(),
+      title: capTrim(title, MAX_GOAL_TITLE),
       costTodayCents,
       targetMonth,
       // A deliberate edit re-aims the goal, so the original moves with it. Only
@@ -1646,6 +1742,7 @@ export const addConstraint = spacetimedb.reducer(
     const caller = requireHuman(ctx);
     sessionOrReject(ctx, sessionId, caller.householdId);
     if (kind !== 'lock' && kind !== 'pin') throw new SenderError('kind must be lock or pin');
+    if (target.length > MAX_CONSTRAINT_JSON) throw new SenderError('that constraint is too large');
 
     const parsed = viaEngine(() => JSON.parse(target) as Constraint);
     const allowed = ['goalOnTime', 'goalFullSize', 'noExtraSaving', 'saveMoreAtMost'];
@@ -2174,22 +2271,110 @@ export const registerAgent = spacetimedb.reducer(
   }
 );
 
+/**
+ * How long a `running` job may go untouched before it counts as abandoned.
+ *
+ * Comfortably longer than the service's own task budget
+ * (`AGENT_TASK_BUDGET_MS`, 60s), so a slow-but-alive job is never stolen from
+ * underneath itself.
+ */
+const STALE_JOB_MICROS = 120_000_000n;
+
+/**
+ * Give up on a job after this many claims.
+ *
+ * A job that crashes the service will crash it again, so unbounded requeuing is
+ * a loop that keeps a household's agent permanently busy failing. Failing the
+ * job instead hands the user the deterministic fallback, which is the whole
+ * point of having one.
+ */
+const MAX_JOB_ATTEMPTS = 3;
+
+/**
+ * Recover jobs abandoned by a service that died mid-flight.
+ *
+ * Requeues anything `running` past `STALE_JOB_MICROS` so it can be picked up
+ * again, or fails it once it has had `MAX_JOB_ATTEMPTS`. Returns how many rows
+ * it touched.
+ *
+ * This runs inside `claimJob` as well as on its own, so a restarted service
+ * recovers without needing to know it crashed.
+ */
+function reclaimStaleJobs(ctx: Ctx, householdId: bigint): number {
+  const now = ctx.timestamp.microsSinceUnixEpoch;
+  let touched = 0;
+
+  for (const job of [...ctx.db.agentJob.householdId.filter(householdId)]) {
+    if (job.status !== 'running') continue;
+    // A row written before this column existed has no claim time; treat it as
+    // stale rather than immortal.
+    const claimed = job.claimedAt?.microsSinceUnixEpoch;
+    if (claimed !== undefined && now - claimed < STALE_JOB_MICROS) continue;
+
+    if (job.attempts >= MAX_JOB_ATTEMPTS) {
+      ctx.db.agentJob.id.update({
+        ...job,
+        status: 'failed',
+        result: 'the assistant stopped responding',
+        progressText: '',
+        claimedAt: undefined,
+      });
+    } else {
+      ctx.db.agentJob.id.update({
+        ...job,
+        status: 'queued',
+        progressText: '',
+        claimedAt: undefined,
+      });
+    }
+    touched++;
+  }
+  return touched;
+}
+
+/**
+ * Recover abandoned jobs, as its own reducer.
+ *
+ * The service calls this on connect and on a timer. A human cannot: like every
+ * other job reducer it is agent-only, so this is not a route for one partner to
+ * disturb the other's in-flight work.
+ */
+export const reclaimJobs = spacetimedb.reducer({}, ctx => {
+  const agent = requireAgent(ctx);
+  reclaimStaleJobs(ctx, agent.householdId);
+});
+
 /** Take a queued job. One at a time per household, in creation order. */
 export const claimJob = spacetimedb.reducer({ jobId: t.u64() }, (ctx, { jobId }) => {
   const agent = requireAgent(ctx);
   const job = ctx.db.agentJob.id.find(jobId);
   if (!job) throw new SenderError('job not found');
   if (job.householdId !== agent.householdId) throw new SenderError('not your household');
-  if (job.status !== 'queued') throw new SenderError('that job is not queued');
+
+  // Before deciding anything, clear out jobs a dead service left behind — the
+  // check below would otherwise read an abandoned row as a live one and refuse
+  // every future claim for this household.
+  reclaimStaleJobs(ctx, job.householdId);
+
+  // Re-read: the job we were asked for may itself have just been requeued or
+  // failed by the sweep above.
+  const fresh = ctx.db.agentJob.id.find(jobId);
+  if (!fresh) throw new SenderError('job not found');
+  if (fresh.status !== 'queued') throw new SenderError('that job is not queued');
 
   // Jobs are processed one at a time per household (07 Agent Spec#Job flow), so
   // a running job blocks the next claim rather than racing it.
-  const running = [...ctx.db.agentJob.householdId.filter(job.householdId)].find(
+  const running = [...ctx.db.agentJob.householdId.filter(fresh.householdId)].find(
     x => x.status === 'running'
   );
   if (running) throw new SenderError('another job is already running');
 
-  ctx.db.agentJob.id.update({ ...job, status: 'running', attempts: job.attempts + 1 });
+  ctx.db.agentJob.id.update({
+    ...fresh,
+    status: 'running',
+    attempts: fresh.attempts + 1,
+    claimedAt: ctx.timestamp,
+  });
 });
 
 /** Progress text, shown live on every screen. */
@@ -2199,7 +2384,13 @@ export const setJobProgress = spacetimedb.reducer(
     const agent = requireAgent(ctx);
     const job = ctx.db.agentJob.id.find(jobId);
     if (!job || job.householdId !== agent.householdId) throw new SenderError('job not found');
-    ctx.db.agentJob.id.update({ ...job, progressText: progressText.slice(0, 200) });
+    // Progress is also a heartbeat: refreshing the claim is what distinguishes
+    // a job that is slow from one whose service has died.
+    ctx.db.agentJob.id.update({
+      ...job,
+      progressText: progressText.slice(0, 200),
+      claimedAt: ctx.timestamp,
+    });
   }
 );
 
@@ -2215,6 +2406,7 @@ export const completeJob = spacetimedb.reducer(
       result: result.slice(0, 20000),
       modelUsed,
       progressText: '',
+      claimedAt: undefined,
     });
   }
 );
@@ -2230,6 +2422,7 @@ export const failJob = spacetimedb.reducer(
       status: 'failed',
       result: reason.slice(0, 2000),
       progressText: '',
+      claimedAt: undefined,
     });
   }
 );
@@ -2245,8 +2438,8 @@ export const postAgentMessage = spacetimedb.reducer(
       sessionId: undefined,
       authorMemberId: agent.id,
       kind: 'text',
-      text: text.slice(0, 2000),
-      chips: chips.slice(0, 6),
+      text: cap(text, 2000),
+      chips: chips.slice(0, 6).map(chip => cap(chip, 40)),
       refId,
       payload: '',
       createdAt: ctx.timestamp,
@@ -2363,7 +2556,7 @@ export const applyEventInterpretation = spacetimedb.reducer(
       householdId: agent.householdId,
       templateId,
       params: JSON.stringify(
-        viaEngine(() => parseParams(templateId as LifeEventTemplateId, params))
+        viaEngine(() => parseParams(templateId as LifeEventTemplateId, safeParams(params)))
       ),
       // `draft` while follow-ups are outstanding: an impact computed from
       // half-known parameters would be worse than none.
@@ -2378,8 +2571,8 @@ export const applyEventInterpretation = spacetimedb.reducer(
       sessionId: undefined,
       authorMemberId: agent.id,
       kind: followUpPrompt.trim() ? 'text' : 'event',
-      text: followUpPrompt.trim() || template.label,
-      chips: followUpChips.slice(0, 6),
+      text: capTrim(followUpPrompt, 300) || template.label,
+      chips: followUpChips.slice(0, 6).map(chip => cap(chip, 40)),
       refId: event.id,
       payload: '',
       createdAt: ctx.timestamp,
@@ -2410,6 +2603,7 @@ export const applyConstraintTranslation = spacetimedb.reducer(
 
     const allowed = ['goalOnTime', 'goalFullSize', 'noExtraSaving', 'saveMoreAtMost'];
     for (const target of targets.slice(0, 4)) {
+      if (target.length > MAX_CONSTRAINT_JSON) throw new SenderError('that constraint is too large');
       const parsed = viaEngine(() => JSON.parse(target) as { kind: string });
       if (!allowed.includes(parsed.kind)) throw new SenderError(`unknown constraint: ${parsed.kind}`);
       ctx.db.constraint.insert({

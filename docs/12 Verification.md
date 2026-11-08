@@ -33,7 +33,7 @@ Command: `verify:flow` (against a local or dev SpacetimeDB)
 
 ## V5 Agent contract
 Command: `verify:agent`
-Run in two modes: **recorded** (saved model responses, no network, deterministic) and **live** (real Nemotron calls, smoke only).
+Run in two modes: **recorded** (no network, deterministic) and **mock** (`BRANCHES_AGENT_MODE=mock`, real HTTP through the bundled mock). The mock speaks the **Gemini Interactions** shape, so mock mode exercises the real `@google/genai` adapter rather than a stand-in; a smaller group covers the OpenAI-compatible secondary path. `verify:agent:e2e` runs the real service over the real bus.
 | ID | Check | Expected |
 |---|---|---|
 | A1 | `classify_life_event` on "we just found out we're pregnant" | templateId `baby`; follow-ups include leave and care |
@@ -43,7 +43,8 @@ Run in two modes: **recorded** (saved model responses, no network, deterministic
 | A5 | Fallback | With the model forced to fail, fallback branches/names appear and the job ends `failed` gracefully |
 | A6 | Failover | Simulated 429 on tier 1 → tier 2 used; `modelUsed` recorded |
 | A7 | **Privacy canaries** | Every logged prompt from a full demo run contains **none** of the private-purchase merchant names, no transaction counterparties, and no raw transactions |
-| A8 | Thinking off (live) | Response has a tool call and no reasoning content |
+| A8 | Live model (needs a key) | The model name resolves, `thinking_level` and `tool_choice.allowed_tools` are accepted, and the interaction ends `requires_action` with a parsed function call — not `incomplete`. `npm run -w @branches/agent smoke` |
+| A9 | Provider normalisation | Both adapters reduce to the same four statuses; `incomplete` / `failed` / an unexpected status are never read as answers; a Gemini thought step is not reported as leaked reasoning while OpenAI `reasoning_content` is |
 
 ## V6 Real-time checklist
 Manual, with one phone and one laptop.
@@ -76,6 +77,20 @@ Manual.
 - [ ] No agent text contains advice language.
 - [ ] Design tokens match [[09 Design System]] (dark background, one accent, member colors only for people).
 - [ ] The full demo works with the agent service stopped (fallbacks).
+
+## V9 Never-stuck
+Command: `verify:screens`. A static scan, because these regressions are each one line long and invisible in development — locally the server is always up and the data always arrives, so the failure only appears on stage.
+| ID | Check | Expected |
+|---|---|---|
+| S1 | Blank pages | No screen component bails out to `return null` while data loads. Scoped to the **default export**: the same line inside a closed sheet is correct |
+| S2 | `Loading` | Reveals an explanation after a timeout, names the connection problem if there is one, and offers a reload. One component is the floor under all six screens that use it |
+| S3 | Connection errors | Reach the user as state, not only `console.warn`, and clear on a successful connect |
+| S4 | Agent stalls | Every screen showing `progressText` also handles `stalled`, and the signal is driven by a clock — a wedged job's row never changes, so nothing else would re-render |
+| S5 | The waiting room | Offers an action, lets the name be corrected in place, and points at `?device=b`. `createHousehold` refuses once you are a member, so this screen had no way back |
+| S6 | No branches | Offers a retry and a way out rather than only waiting |
+| S7 | Agent off | Chat detects whether an agent exists at all, and the form path is reachable regardless ([[07 Agent Spec#Deterministic fallbacks]]) |
+
+What it cannot check is whether the copy is any good. That stays in V8 above.
 
 ## Demo run-through
 - [ ] Reset demo data → full journey → commit → reset again, three times in a row without errors.

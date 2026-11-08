@@ -36,7 +36,22 @@ Condensed from the team's research documents. Items marked **(verify)** have not
 - **Correction:** reducers still cannot make outbound HTTP calls, but **procedures and HTTP handlers can** (`ctx.http.fetch`). This does not change the design — the agent service stays a separate client, because validation, retries and failover belong outside the database — but it is no longer true that the module *cannot* reach the network.
 - **Note:** the research's sample `simulateYear` reducer never subtracted completed goal costs from savings. Don't reuse it; the yearly wrap (stretch) must follow [[06 Engine Spec]] semantics.
 
+## Gemini
+
+_Confirmed against `@google/genai` 3.0.0 and a live call, Stage 8._
+
+- **The spec's shape is right.** `ai.interactions.create` exists; `CreateModelInteraction` takes `model`, `store`, `input`, `system_instruction`, `tools`, `generation_config`, `response_format`. `GenerationConfig.thinking_level` is `"minimal" | "low" | "medium" | "high"`; `tool_choice.allowed_tools` is `{ mode, tools: string[] }`; a function tool is the flat `{ type: "function", name, description, parameters }`. A `function_call` step carries `arguments` **already parsed** as an object.
+- **`interactions.create` ignores constructor-level retry settings.** Neither `new GoogleGenAI({ retries })` nor `httpOptions.retryOptions` reaches it — it silently makes **five** backed-off attempts on a 429 or 5xx. On a free-tier rate limit that is tens of seconds spent before our own failover is even consulted. Retries must be disabled **per request**, which does work: `create(params, { retries: { strategy: 'none' }, timeout_ms })`. `verify:agent` M15 pins this by timing a 429.
+- **Timeouts are per request too**, and raise `APIConnectionTimeoutError` with no `.status`.
+- **Errors are thrown, not returned**, as named classes (`RateLimitError`, `BadRequestError`, …) carrying `.status`.
+- **`error.message` is useless for diagnosis.** A rejected key arrives as `400 API error occurred: {"httpMeta":{"response":{},"request":{}}}`; Google's actual explanation is only in `error.body`. `messageOf` in `providers.ts` unwraps it, which turned an opaque 400 into "API key not valid" in one step.
+- **The SDK POSTs its request body verbatim** to `{baseUrl}/v1/interactions`. That is what lets `GEMINI_BASE_URL` point at the bundled mock and exercise the real adapter with no key. Note it takes an **origin**, with no path.
+- **Key format matters.** An AI Studio API key looks like `AIza…` (~39 chars). A credential beginning `AQ.` is not one — it is an ephemeral/session token and the Gemini API rejects it as "API key not valid".
+
 ## Nemotron
+
+_Retired in Stage 8: [[07 Agent Spec]] is Gemini-only, which forfeits the NVIDIA track (OD-16). Kept for the record, and because the thinking/token-budget lesson generalised — it is the same failure Gemini reports as `status: incomplete`._
+
 - Base URL `https://integrate.api.nvidia.com/v1`, OpenAI-compatible, key from build.nvidia.com. Free endpoints for the recommended models.
 - Primary `nvidia/nemotron-3.5-bolt-e4b` (66K context, strict JSON schema, tool calling); failover `nvidia/nemotron-3.5-lightning-30b-a3b`; vision (stretch) `nvidia/nemotron-3.5-super-vl-120b-a12b`.
 - Weights for the top models aren't downloadable, so don't self-host on Brev; use the hosted API.

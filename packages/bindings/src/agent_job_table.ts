@@ -20,6 +20,7 @@ export default __t.row({
   progressText: __t.string().name("progress_text"),
   result: __t.string(),
   attempts: __t.i32(),
+  claimedAt: __t.option(__t.timestamp()).name("claimed_at"),
   modelUsed: __t.string().name("model_used"),
   promptMessageId: __t.option(__t.u64()).name("prompt_message_id"),
   createdAt: __t.timestamp().name("created_at"),

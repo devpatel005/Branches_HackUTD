@@ -4,7 +4,7 @@
 
 ## What we're building
 
-**Branches** is a shared financial planner for couples, built for HackUTD 2026 (PNC track, plus SpacetimeDB and NVIDIA tracks). Both partners' accounts feed a combined baseline, they set goals on a rolling 10-year timeline, and when life happens (a pregnancy, a job loss, a raise) a Nemotron agent and a deterministic math engine produce **branches**: alternative paths forward. The couple picks one together in a **live planning session** and locks it in with a simultaneous press-and-hold.
+**Branches** is a shared financial planner for couples, built for HackUTD 2026 (PNC track, plus SpacetimeDB; the third track is OPEN(OD-16), since dropping Nemotron forfeited NVIDIA). Both partners' accounts feed a combined baseline, they set goals on a rolling 10-year timeline, and when life happens (a pregnancy, a job loss, a raise) a Gemini agent and a deterministic math engine produce **branches**: alternative paths forward. The couple picks one together in a **live planning session** and locks it in with a simultaneous press-and-hold.
 
 Full picture: [[01 Product Overview]].
 
@@ -52,7 +52,7 @@ branches/
   stages/               build plan
   apps/mobile/          Expo (React Native) app — phones via Expo Go + web
   server/spacetime/     SpacetimeDB TypeScript module
-  services/agent/       Node service: subscribes to SpacetimeDB, calls Nemotron
+  services/agent/       Node service: subscribes to SpacetimeDB, calls Gemini
   packages/engine/      pure TypeScript math, simulation, levers, branches
   packages/bindings/    generated SpacetimeDB client bindings (app + agent + verify)
   packages/mock-data/   deterministic mock households and transactions
@@ -61,7 +61,7 @@ branches/
 
 ## Current stage
 
-**Current stage:** [[Stage 0 - Foundations and Risk Checks]] *(the team updates this line)*
+**Current stage:** [[Stage 8 - Polish and Demo Hardening]] *(the team updates this line)*
 
 ## Commands
 
@@ -76,7 +76,7 @@ curl -sSf https://install.spacetimedb.com | sh   # SpacetimeDB CLI
 export PATH="$HOME/.local/bin:$PATH"             # add to your shell profile
 cp .env.example .env
 cp apps/mobile/.env.example apps/mobile/.env
-cp services/agent/.env.example services/agent/.env   # add NVIDIA_API_KEY
+cp services/agent/.env.example services/agent/.env   # add GEMINI_API_KEY
 ```
 
 ### SpacetimeDB module
@@ -101,17 +101,24 @@ On a physical phone, `127.0.0.1` is the phone itself. Set
 `EXPO_PUBLIC_SPACETIME_HOST` to your laptop's LAN IP, or publish to Maincloud.
 
 ### Agent service
-No API key? The bundled mock exercises the whole path — bus, claim, progress,
-all four validation gates, retry, failover and the fallbacks:
+Gemini via the Interactions API (`@google/genai`). With a key in
+`services/agent/.env` there is nothing else to set:
 ```bash
-npm run agent:mock                                            # terminal 1
-AGENT_BASE_URL=http://127.0.0.1:8099/v1 npm run agent         # terminal 2
+npm run agent
+npm run -w @branches/agent smoke      # does the real model accept our request?
 ```
-With a real provider — Nemotron by default, or any OpenAI-compatible endpoint:
+No API key? The bundled mock speaks the **Gemini Interactions shape**, so the
+whole path — bus, claim, progress, all four validation gates, retry, failover,
+truncation handling, fallbacks — runs through the real adapter:
 ```bash
-NVIDIA_API_KEY=... npm run agent
+npm run agent:mock                                     # terminal 1
+GEMINI_BASE_URL=http://127.0.0.1:8099 npm run agent    # terminal 2
+```
+`GEMINI_BASE_URL` takes an **origin** with no path; the SDK appends
+`/v1/interactions`. The OpenAI-compatible path is still there for trying another
+provider:
+```bash
 AGENT_BASE_URL=https://api.openai.com/v1 AGENT_MODEL=gpt-4o-mini AGENT_API_KEY=sk-... npm run agent
-npm run -w @branches/agent smoke                              # is my endpoint working?
 ```
 The module checks a shared secret before granting the `agent` role; it lives in
 `server/spacetime/src/agent-secret.ts` and must match `AGENT_SECRET`.
@@ -126,7 +133,7 @@ npm run verify:inference    # V3 Inference — the expected table from 11 Mock D
 npm run verify:stdb         # Stage 0 data path (needs a published module)
 npm run verify:flow         # V4 Data flow — two clients through onboarding (needs a module)
 npm run verify:agent        # V5 Agent contract — validation gates, allowlist, fallbacks
-BRANCHES_AGENT_MODE=mock npm run verify:agent   # ...plus retry and failover over real HTTP
+BRANCHES_AGENT_MODE=mock npm run verify:agent   # ...plus retry, failover, truncation over real HTTP
 npm run verify:agent:e2e    # the real service over the real bus (needs the mock + agent running)
 npm run verify:ready        # V7 ready check — two live clients (needs a module)
 npm run verify:selftest     # proves the harness reports failures (exits 1 by design)

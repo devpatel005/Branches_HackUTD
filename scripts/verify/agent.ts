@@ -4,15 +4,18 @@
  * Runs in two modes:
  *   **recorded** (default) — no network. Exercises the validation gates, the
  *   context allowlist and the fallbacks directly, deterministically.
- *   **mock** — spawns the bundled OpenAI-compatible mock and drives real HTTP
- *   through `runTask`, so retry, failover and thinking-detection are exercised
- *   for real without any API key.
+ *   **mock** — spawns the bundled mock and drives real HTTP through `runTask`,
+ *   so retry, failover and truncation handling are exercised for real without
+ *   any API key. The mock speaks the **Gemini Interactions** shape, so these
+ *   run through the actual `@google/genai` adapter rather than a stand-in;
+ *   a smaller group covers the OpenAI-compatible secondary path.
  *
  *   npm run verify:agent
  *   BRANCHES_AGENT_MODE=mock npm run verify:agent
  *
- * A8 (thinking off, live) cannot be settled without a real key and is reported
- * as PENDING rather than silently passing.
+ * A8 (the real model name, and that `thinking_level` and
+ * `tool_choice.allowed_tools` are accepted as sent) cannot be settled without a
+ * real key, and is reported as PENDING rather than silently passing.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync, rmSync, existsSync } from 'node:fs';
@@ -33,8 +36,16 @@ import {
   MAX_BRANCH_NAME,
 } from '@branches/agent/src/validate.ts';
 import { fallbackFor } from '@branches/agent/src/fallbacks.ts';
-import { tiersFromEnv, shouldFailover } from '@branches/agent/src/providers.ts';
-import { runTask } from '@branches/agent/src/tasks.ts';
+import {
+  GEMINI_FALLBACK_MODEL,
+  GEMINI_PRIMARY_MODEL,
+  normaliseCompletion,
+  normaliseInteraction,
+  shouldFailover,
+  tiersFromEnv,
+  timeoutMs,
+} from '@branches/agent/src/providers.ts';
+import { runTask, taskBudgetMs } from '@branches/agent/src/tasks.ts';
 import { classifyLifeEventTool, selectBranchesTool } from '@branches/agent/src/tools.ts';
 import {
   E5_BABY_EVENT,
@@ -55,7 +66,14 @@ const MODE = process.env.BRANCHES_AGENT_MODE === 'mock' ? 'mock' : 'recorded';
  * like a pass until the check asserted the gate instead of a boolean.
  */
 let nextMockPort = 8111;
-const mockUrlFor = (port: number) => `http://127.0.0.1:${port}/v1`;
+/**
+ * An **origin**, not a URL with a path.
+ *
+ * The Gemini SDK appends `/v1/interactions` itself, so `GEMINI_BASE_URL` takes
+ * the origin; the OpenAI adapter takes a base ending in `/v1`. Handing the
+ * wrong one to either is a 404 that looks like a model failure.
+ */
+const mockOriginFor = (port: number) => `http://127.0.0.1:${port}`;
 
 const checks: Check[] = [];
 
@@ -234,6 +252,8 @@ checks.push(
 // ======================================================================
 // A6 - failover
 // ======================================================================
+const geminiOnly = { GEMINI_API_KEY: 'x' } as NodeJS.ProcessEnv;
+
 checks.push(
   check('A6a', 'a 429 fails over', shouldFailover(429), true),
   check('A6b', 'a 402 fails over', shouldFailover(402), true),
@@ -241,38 +261,166 @@ checks.push(
   check('A6d', 'a 400 does not — that is our bug, not theirs', shouldFailover(400), false),
   check(
     'A6e',
-    'tier 1 defaults to Nemotron',
-    tiersFromEnv({ NVIDIA_API_KEY: 'x' } as NodeJS.ProcessEnv)[0]?.model,
-    'nvidia/nemotron-3.5-bolt-e4b'
+    'tier 1 is Gemini flash',
+    tiersFromEnv(geminiOnly)[0]?.model,
+    GEMINI_PRIMARY_MODEL
   ),
   check(
     'A6f',
-    'a Nemotron key yields two Nemotron tiers',
-    tiersFromEnv({ NVIDIA_API_KEY: 'x' } as NodeJS.ProcessEnv).length,
-    2
+    'tier 1 thinks at "low", per the spec',
+    tiersFromEnv(geminiOnly)[0]?.thinkingLevel,
+    'low'
   ),
   check(
     'A6g',
-    'AGENT_BASE_URL overrides tier 1 for testing another provider',
-    tiersFromEnv({ AGENT_BASE_URL: 'http://localhost:1/v1', AGENT_MODEL: 'test', AGENT_API_KEY: 'k' } as NodeJS.ProcessEnv)[0]?.model,
-    'test'
+    'tier 2 is flash-lite, and thinks less rather than more',
+    tiersFromEnv(geminiOnly).map(t => `${t.model}/${t.thinkingLevel}`)[1],
+    `${GEMINI_FALLBACK_MODEL}/minimal`
   ),
-  check(
-    'A6h',
-    'thinking-off is only sent to Nemotron endpoints',
-    tiersFromEnv({ AGENT_BASE_URL: 'https://api.openai.com/v1', AGENT_API_KEY: 'k' } as NodeJS.ProcessEnv)[0]?.nemotron,
-    false
-  ),
+  check('A6h', 'a Gemini key yields exactly two tiers', tiersFromEnv(geminiOnly).length, 2),
   check(
     'A6i',
+    'both Gemini tiers are the gemini provider',
+    tiersFromEnv(geminiOnly).map(t => t.provider),
+    ['gemini', 'gemini']
+  ),
+  check(
+    'A6j',
+    'AGENT_BASE_URL still selects the OpenAI-compatible path',
+    tiersFromEnv({ AGENT_BASE_URL: 'http://localhost:1/v1', AGENT_MODEL: 'test', AGENT_API_KEY: 'k' } as NodeJS.ProcessEnv)[0]?.provider,
+    'openai'
+  ),
+  check(
+    'A6k',
+    'and AGENT_PROVIDER overrides even that',
+    tiersFromEnv({
+      AGENT_PROVIDER: 'gemini',
+      AGENT_BASE_URL: 'http://localhost:1/v1',
+      GEMINI_API_KEY: 'x',
+    } as NodeJS.ProcessEnv)[0]?.provider,
+    'gemini'
+  ),
+  check(
+    'A6l',
     'a third tier appears when a fallback provider is configured',
     tiersFromEnv({
-      NVIDIA_API_KEY: 'x',
+      GEMINI_API_KEY: 'x',
       FALLBACK_LLM_BASE_URL: 'https://api.openai.com/v1',
       FALLBACK_LLM_API_KEY: 'k',
       FALLBACK_LLM_MODEL: 'gpt-4o-mini',
     } as NodeJS.ProcessEnv).length,
     3
+  ),
+  check(
+    'A6m',
+    'no key and no mock means no tier, rather than a tier that always fails',
+    tiersFromEnv({} as NodeJS.ProcessEnv).length,
+    0
+  ),
+  check(
+    'A6n',
+    'a local mock needs no key',
+    tiersFromEnv({ GEMINI_BASE_URL: 'http://127.0.0.1:8099' } as NodeJS.ProcessEnv).length,
+    2
+  ),
+  // Tier numbers are renumbered after filtering, so a failure message can never
+  // name a tier that is not in the chain.
+  check(
+    'A6o',
+    'tier numbers are contiguous from 1',
+    tiersFromEnv({
+      GEMINI_API_KEY: 'x',
+      FALLBACK_LLM_BASE_URL: 'https://api.openai.com/v1',
+      FALLBACK_LLM_API_KEY: 'k',
+    } as NodeJS.ProcessEnv).map(t => t.tier),
+    [1, 2, 3]
+  )
+);
+
+// ======================================================================
+// A9 - normalising the two provider shapes
+// ======================================================================
+// Both adapters must reduce to the same four statuses, because `tasks.ts` makes
+// its retry-or-failover decision from them and nothing else. These are pure
+// shape tests, which is why they run in recorded mode with no network.
+const geminiCall = normaliseInteraction({
+  status: 'requires_action',
+  steps: [{ type: 'function_call', id: 'c1', name: 'select_branches', arguments: { picks: [] } }],
+  output_text: '',
+});
+const geminiIncomplete = normaliseInteraction({ status: 'incomplete', output_text: 'trunca' });
+const openaiCall = normaliseCompletion({
+  choices: [
+    {
+      finish_reason: 'tool_calls',
+      message: {
+        content: null,
+        tool_calls: [{ id: 'c1', function: { name: 'select_branches', arguments: '{"picks":[]}' } }],
+      },
+    },
+  ],
+});
+const openaiBrokenArgs = normaliseCompletion({
+  choices: [
+    {
+      finish_reason: 'tool_calls',
+      message: { tool_calls: [{ id: 'c1', function: { name: 'x', arguments: '{"picks":' } }] },
+    },
+  ],
+});
+
+checks.push(
+  check('A9a', 'a Gemini function call normalises to requires_action', geminiCall.status, 'requires_action'),
+  check('A9b', 'and its arguments arrive already parsed', typeof geminiCall.toolCall?.arguments, 'object'),
+  check('A9c', 'Gemini incomplete normalises to incomplete', geminiIncomplete.status, 'incomplete'),
+  check(
+    'A9d',
+    'a Gemini failure maps to failed, whatever word it used',
+    ['failed', 'cancelled', 'budget_exceeded'].map(status => normaliseInteraction({ status }).status),
+    ['failed', 'failed', 'failed']
+  ),
+  check(
+    'A9e',
+    'an unexpected status is not quietly treated as success',
+    normaliseInteraction({ status: 'in_progress' }).status,
+    'unknown'
+  ),
+  check('A9f', 'an OpenAI tool call normalises the same way', openaiCall.status, 'requires_action'),
+  check(
+    'A9g',
+    'and its argument string is parsed by the adapter, not the task',
+    typeof openaiCall.toolCall?.arguments,
+    'object'
+  ),
+  check(
+    'A9h',
+    'finish_reason "length" is the OpenAI spelling of incomplete',
+    normaliseCompletion({ choices: [{ finish_reason: 'length', message: { content: 'tru' } }] }).status,
+    'incomplete'
+  ),
+  check('A9i', 'unparsable tool arguments are a provider failure, not a crash', openaiBrokenArgs.status, 'failed'),
+  check(
+    'A9j',
+    'Gemini thought steps are never reported as leaked reasoning',
+    normaliseInteraction({ status: 'completed', steps: [{ type: 'thought' }], output_text: 'hi' }).reasoning,
+    null
+  ),
+  check(
+    'A9k',
+    'but OpenAI reasoning_content is',
+    normaliseCompletion({
+      choices: [{ finish_reason: 'stop', message: { content: 'hi', reasoning_content: 'hmm' } }],
+    }).reasoning,
+    'hmm'
+  ),
+  // The budget exists so a job cannot sit `running` for the sum of every
+  // timeout in the chain while the couple watches a spinner.
+  check('A9l', 'a task has a wall-clock budget, not just an attempt count', taskBudgetMs({} as NodeJS.ProcessEnv) > 0, true),
+  check(
+    'A9m',
+    'and the budget is longer than one call timeout',
+    taskBudgetMs({} as NodeJS.ProcessEnv) > timeoutMs({} as NodeJS.ProcessEnv),
+    true
   )
 );
 
@@ -314,11 +462,11 @@ if (MODE === 'mock') {
 
   process.env.AGENT_PROMPT_LOG = promptLog;
 
+  // The mock speaks the Gemini Interactions shape, so these checks drive the
+  // real `@google/genai` adapter — request body, `status`, `steps` — and not a
+  // generic path the demo never takes.
   const baseMock = await startMock({});
-  const mockTiers = tiersFromEnv({
-    AGENT_BASE_URL: baseMock.url,
-    AGENT_MODEL: 'mock',
-  } as NodeJS.ProcessEnv);
+  const mockTiers = geminiTiersAt(baseMock.origin);
 
   // A real classification over HTTP.
   const classified = await runTask(mockTiers, {
@@ -340,7 +488,7 @@ if (MODE === 'mock') {
   );
 
   // An invented number must be rejected, retried, and ultimately fail.
-  const inventing = await runTaskWithEnv({ MOCK_INVENT_NUMBER: '1' }, mockTiers);
+  const inventing = await runTaskWithEnv({ MOCK_INVENT_NUMBER: '1' });
   const inventingReason = inventing.ok ? '(accepted!)' : inventing.reason;
   checks.push(
     check('M3', 'an invented number is rejected rather than trusted', inventing.ok, false),
@@ -351,35 +499,94 @@ if (MODE === 'mock') {
   );
 
   // Advice language must be rejected too.
-  const advising = await runTaskWithEnv({ MOCK_ADVICE: '1' }, mockTiers);
+  const advising = await runTaskWithEnv({ MOCK_ADVICE: '1' });
   const advisingReason = advising.ok ? '(accepted!)' : advising.reason;
   checks.push(
     check('M6', 'advice language is rejected', advising.ok, false),
     check('M7', 'and the rejection names the language gate', gateOf(advisingReason), 'language')
   );
 
-  // Thinking on must be treated as a tier failure, not a usable answer.
-  const thinking = await runTaskWithEnv({ MOCK_THINKING: '1' }, mockTiers);
+  // `status: incomplete` is the Gemini failure that matters most: a 200 OK with
+  // truncated content, because the output budget counts thinking tokens
+  // (07 Agent Spec). Trusting it would put half a sentence on screen.
+  const incomplete = await runTaskWithEnv({ MOCK_STATUS: 'incomplete' });
   checks.push(
-    check('M8', 'reasoning content is treated as thinking-not-off', thinking.ok, false),
-    check('M9', 'and says so', (thinking.ok ? '' : thinking.reason).includes('thinking is not off'), true)
+    check('M8', 'status incomplete is not treated as an answer', incomplete.ok, false),
+    check(
+      'M9',
+      'and the reason names the truncation, not a validation gate',
+      (incomplete.ok ? '' : incomplete.reason).includes('incomplete'),
+      true
+    )
   );
 
-  // A 429 must fail over rather than retry forever.
-  const rateLimited = await runTaskWithEnv({ MOCK_FAIL_STATUS: '429' }, mockTiers);
+  // The sharp version: a *plausible* tool call arriving alongside `incomplete`.
+  // The status has to win, or the gate is decided by whichever field is checked
+  // first.
+  const truncated = await runTaskWithEnv({ MOCK_TRUNCATE: '1' });
   checks.push(
-    check('M10', 'a 429 ends in a clean failure, not a hang', rateLimited.ok, false),
-    check('M11', 'and reports the status', (rateLimited.ok ? '' : rateLimited.reason).includes('429'), true)
+    check('M10', 'a truncated answer is rejected even though a tool call is present', truncated.ok, false),
+    check(
+      'M11',
+      'and it fails over rather than retrying the same ceiling',
+      (truncated.ok ? 0 : truncated.attempts) <= 2,
+      true
+    )
+  );
+
+  const failedStatus = await runTaskWithEnv({ MOCK_STATUS: 'failed' });
+  checks.push(check('M12', 'status failed is a tier failure', failedStatus.ok, false));
+
+  // A 429 must fail over rather than retry forever. This also pins the finding
+  // that `interactions.create` ignores constructor-level retry settings: left
+  // at the SDK default it makes five backed-off attempts per tier, and this
+  // check would run for roughly half a minute instead of milliseconds.
+  const startedAt = Date.now();
+  const rateLimited = await runTaskWithEnv({ MOCK_FAIL_STATUS: '429' });
+  const rateLimitMs = Date.now() - startedAt;
+  checks.push(
+    check('M13', 'a 429 ends in a clean failure, not a hang', rateLimited.ok, false),
+    check('M14', 'and reports the status', (rateLimited.ok ? '' : rateLimited.reason).includes('429'), true),
+    check('M15', 'SDK-level retries are off, so failover is ours alone', rateLimitMs < 5000, true)
   );
 
   // A7 again, but against prompts that actually went over the wire.
   const logged = existsSync(promptLog) ? readFileSync(promptLog, 'utf8') : '';
   checks.push(
-    check('M12', 'prompts were logged for auditing', logged.length > 0, true),
-    check('M13', 'no canary merchant reached a real prompt', PRIVATE_MERCHANT_CANARIES.filter(n => logged.includes(n)), []),
-    check('M14', 'no transaction counterparty reached a real prompt', counterparties.filter(n => logged.includes(n)), [])
+    check('M16', 'prompts were logged for auditing', logged.length > 0, true),
+    check('M17', 'no canary merchant reached a real prompt', PRIVATE_MERCHANT_CANARIES.filter(n => logged.includes(n)), []),
+    check('M18', 'no transaction counterparty reached a real prompt', counterparties.filter(n => logged.includes(n)), [])
   );
 
+  // ====================================================================
+  // The OpenAI-compatible path, kept as the secondary provider
+  // ====================================================================
+  const openaiMock = await startMock({});
+  const openaiTiers = tiersFromEnv({
+    AGENT_BASE_URL: `${openaiMock.origin}/v1`,
+    AGENT_MODEL: 'mock',
+  } as NodeJS.ProcessEnv);
+
+  const viaOpenAI = await runNaming(openaiTiers);
+  checks.push(
+    check('O1', 'the OpenAI adapter still reaches a valid answer', viaOpenAI.ok, true),
+    check('O2', 'and it is selected by AGENT_BASE_URL alone', openaiTiers[0]?.provider, 'openai')
+  );
+
+  // Thinking left on is an OpenAI-shape problem only — it spends the token
+  // budget on reasoning and returns nothing usable. Gemini has no equivalent,
+  // because `thinking_level` is configuration rather than a leak.
+  const thinkingMock = await startMock({ MOCK_THINKING: '1' });
+  const thinking = await runNaming(
+    tiersFromEnv({
+      AGENT_BASE_URL: `${thinkingMock.origin}/v1`,
+      AGENT_MODEL: 'mock',
+    } as NodeJS.ProcessEnv)
+  );
+  checks.push(
+    check('O3', 'reasoning content is treated as thinking-not-off', thinking.ok, false),
+    check('O4', 'and says so', (thinking.ok ? '' : thinking.reason).includes('thinking is not off'), true)
+  );
 }
 
 /**
@@ -392,7 +599,7 @@ function gateOf(reason: string): string {
 }
 
 /** Start a mock on a fresh port and wait until it answers. */
-async function startMock(env: Record<string, string>): Promise<{ url: string }> {
+async function startMock(env: Record<string, string>): Promise<{ origin: string }> {
   const port = nextMockPort++;
   const child = spawn(
     process.execPath,
@@ -403,19 +610,33 @@ async function startMock(env: Record<string, string>): Promise<{ url: string }> 
     { env: { ...process.env, MOCK_PORT: String(port), ...env }, stdio: 'ignore' }
   );
   mocks.push(child);
-  const url = mockUrlFor(port);
-  await waitForMock(url);
-  return { url };
+  const origin = mockOriginFor(port);
+  await waitForMock(origin);
+  return { origin };
 }
 
-/** Re-run the naming task against a mock started with behaviour knobs set. */
-async function runTaskWithEnv(
-  env: Record<string, string>,
-  _tiers: ReturnType<typeof tiersFromEnv>
-): Promise<Awaited<ReturnType<typeof runTask<{ picks: unknown[] }>>>> {
-  const { url } = await startMock(env);
-  const tiers = tiersFromEnv({ AGENT_BASE_URL: url, AGENT_MODEL: 'mock' } as NodeJS.ProcessEnv);
+/**
+ * Two Gemini tiers pointed at a mock.
+ *
+ * Both tiers, not one: a tier failure has to have somewhere to fail *to*, or
+ * "it failed over" and "it gave up" are the same observation.
+ */
+function geminiTiersAt(origin: string): ReturnType<typeof tiersFromEnv> {
+  return tiersFromEnv({ GEMINI_BASE_URL: origin } as NodeJS.ProcessEnv);
+}
 
+/** Re-run the naming task against a Gemini mock started with knobs set. */
+async function runTaskWithEnv(
+  env: Record<string, string>
+): Promise<Awaited<ReturnType<typeof runTask<{ picks: unknown[] }>>>> {
+  const { origin } = await startMock(env);
+  return runNaming(geminiTiersAt(origin));
+}
+
+/** The branch-naming task, the one with every gate in play. */
+async function runNaming(
+  tiers: ReturnType<typeof tiersFromEnv>
+): Promise<Awaited<ReturnType<typeof runTask<{ picks: unknown[] }>>>> {
   return runTask(tiers, {
     kind: 'select_branches',
     context: contextInput,
@@ -434,13 +655,13 @@ async function runTaskWithEnv(
   });
 }
 
-async function waitForMock(url: string): Promise<void> {
+async function waitForMock(origin: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
-      const response = await fetch(`${url}/chat/completions`, {
+      const response = await fetch(`${origin}/v1/interactions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ messages: [] }),
+        body: JSON.stringify({ input: '' }),
       });
       if (response.status > 0) return;
     } catch {
@@ -448,17 +669,17 @@ async function waitForMock(url: string): Promise<void> {
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error(`mock server did not start on ${url}`);
+  throw new Error(`mock server did not start on ${origin}`);
 }
 
 const ok = printTable(`V5 Agent contract (${MODE} mode)`, checks);
 
 if (MODE === 'recorded') {
-  console.log('For the HTTP path — retry, failover, thinking detection, prompt logging:');
+  console.log('For the HTTP path — retry, failover, truncation, prompt logging:');
   console.log('  BRANCHES_AGENT_MODE=mock npm run verify:agent\n');
 }
-console.log('PENDING A8 — thinking off against the real endpoint. Needs a live key:');
-console.log('  NVIDIA_API_KEY=... npm run -w @branches/agent smoke\n');
+console.log('PENDING A8 — the real model name and parameters. Needs a live key:');
+console.log('  GEMINI_API_KEY=... npm run -w @branches/agent smoke\n');
 
 for (const child of mocks) child.kill();
 finish(ok);

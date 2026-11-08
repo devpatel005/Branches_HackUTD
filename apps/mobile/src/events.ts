@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTable } from 'spacetimedb/react';
 import { tables } from '@branches/bindings';
 import { EVENT_TEMPLATES, type EffectLine, type LifeEventTemplateId, type Provenance } from '@branches/engine';
@@ -82,15 +82,53 @@ export function useImpact(eventId: bigint | undefined) {
  * `progressText` is written by the agent service as it goes, so both partners
  * see "Thinking…" at the same moment (04 Architecture#Message bus pattern).
  */
+/**
+ * How long outstanding agent work may go quiet before the UI offers a way
+ * around it.
+ *
+ * Shorter than the service's own task budget (60s) and the module's staleness
+ * threshold (120s), on purpose: this is not a declaration that the job failed,
+ * it is an offer of the form while the job keeps trying. The deterministic path
+ * is always available, so saying so early costs nothing and being wrong costs
+ * nothing either.
+ */
+const AGENT_QUIET_MS = 20000;
+
 export function useAgentActivity() {
   const { me } = useMe();
   const [jobs, ready] = useTable(tables.agentJob);
   const mine = me ? jobs.filter(j => j.householdId === me.householdId) : [];
   const running = mine.find(j => j.status === 'running');
-  const queued = mine.filter(j => j.status === 'queued').length;
+  const queuedJobs = mine.filter(j => j.status === 'queued');
+  const queued = queuedJobs.length;
   const lastFailed = mine
     .filter(j => j.status === 'failed')
     .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
+
+  const outstanding = running ?? queuedJobs.sort((a, b) => (a.id < b.id ? -1 : 1))[0];
+
+  // A clock, because the thing we are trying to detect is the *absence* of
+  // change. If the agent service dies mid-job its row never updates again, so
+  // no subscription event will ever arrive to re-render this — without a tick
+  // the spinner stays on screen forever and the user has nothing to act on.
+  // The interval only runs while something is outstanding.
+  const [now, setNow] = useState(() => Date.now());
+  const hasOutstanding = outstanding !== undefined;
+  useEffect(() => {
+    if (!hasOutstanding) return;
+    const timer = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(timer);
+  }, [hasOutstanding]);
+
+  // The claim stamp for running work, the queue time for work not yet picked
+  // up: a job nobody ever claims is just as stuck as one abandoned halfway.
+  const sinceMicros = running
+    ? (running.claimedAt ?? running.createdAt).microsSinceUnixEpoch
+    : outstanding?.createdAt.microsSinceUnixEpoch;
+
+  const quietMs =
+    sinceMicros === undefined ? 0 : Math.max(0, now - Number(sinceMicros / 1000n));
+
   return {
     ready,
     running,
@@ -98,6 +136,9 @@ export function useAgentActivity() {
     progressText: running?.progressText ?? '',
     /** Whether an agent is registered at all — drives the fallback copy. */
     lastFailed,
+    /** Outstanding work that has gone quiet for longer than is reassuring. */
+    stalled: hasOutstanding && quietMs > AGENT_QUIET_MS,
+    quietSeconds: Math.round(quietMs / 1000),
   };
 }
 

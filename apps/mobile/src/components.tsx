@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,6 +10,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { useConnectionTrouble } from './spacetime';
 import { colors, space, tabularNums, type as typeScale } from './theme';
 
 /**
@@ -255,10 +257,59 @@ export function Divider() {
 }
 
 /** Only render this when there are no rows *and* the table is not ready. */
-export function Loading({ label = 'Loading…' }: { label?: string }) {
+/** How long a spinner may sit there before it owes the user an explanation. */
+const SLOW_MS = 8000;
+
+/**
+ * A loading state that cannot become a dead end.
+ *
+ * Six screens short-circuit to this while they wait for a row, and every one of
+ * them used to spin indefinitely if the row never came — which is precisely
+ * what happens when the server is not running, the module is not published, or
+ * the host is wrong. None of those resolve by waiting.
+ *
+ * So after `SLOW_MS` it says what it is waiting for, names the connection
+ * problem if there is one, and offers a reload. Fixing it here rather than at
+ * the six call sites means a screen added later gets the same floor for free.
+ */
+export function Loading({ label = 'Loading…', hint }: { label?: string; hint?: string }) {
+  const [slow, setSlow] = useState(false);
+  const { error, host } = useConnectionTrouble();
+
+  useEffect(() => {
+    const timer = setTimeout(() => setSlow(true), SLOW_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <View style={styles.loading}>
       <Text style={styles.caption}>{label}</Text>
+
+      {slow || error ? (
+        <View style={styles.loadingHelp}>
+          <Text style={styles.caption}>
+            {error
+              ? `Can't reach the planner at ${host}. ${error}`
+              : hint ?? 'This is taking longer than it should.'}
+          </Text>
+          {/*
+            Reload is the only recovery the app can offer by itself: the
+            connection is owned by the provider above, and a failed first
+            connect leaves nothing to retry against.
+          */}
+          {Platform.OS === 'web' ? (
+            <Button
+              label="Reload"
+              variant="secondary"
+              onPress={() => {
+                if (typeof window !== 'undefined') window.location.reload();
+              }}
+            />
+          ) : (
+            <Text style={styles.caption}>Close and reopen the app to try again.</Text>
+          )}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -272,6 +323,7 @@ export function Notice({ children, tone = 'quiet' }: { children: ReactNode; tone
 }
 
 const styles = StyleSheet.create({
+  loadingHelp: { marginTop: space.lg, gap: space.sm, maxWidth: 420, alignItems: 'center' },
   screen: { flex: 1, backgroundColor: colors.bg },
   screenContent: { padding: space.sidePadding, paddingTop: space.lg, paddingBottom: space.xl * 2 },
   screenStatic: { flex: 1, backgroundColor: colors.bg, padding: space.sidePadding, paddingTop: space.lg },
@@ -344,7 +396,7 @@ const styles = StyleSheet.create({
   fieldCentered: { textAlign: 'center', letterSpacing: 6, fontSize: 24, fontWeight: '700' },
 
   divider: { height: 1, backgroundColor: colors.hairline, marginVertical: space.md },
-  loading: { paddingVertical: space.xl, alignItems: 'center' },
+  loading: { paddingVertical: space.xl, alignItems: 'center', paddingHorizontal: space.sidePadding },
 
   notice: {
     backgroundColor: colors.surface,

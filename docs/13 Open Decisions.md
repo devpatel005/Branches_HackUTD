@@ -25,5 +25,6 @@ Claude Code: use the **default** for each item, mark code with `// OPEN(OD-x)`, 
 | OD-16 | Third Devpost track | **Unresolved.** [[07 Agent Spec]] moved to Gemini-only, which forfeits NVIDIA. Photon is the likely replacement — see [[17 Stage 8 Handoff]] | Before submission |
 | OD-17 | Rounding ties on negative money | Half away from zero, so `toCents(-x) === -toCents(x)` — see [[15 Money and Rounding]] | Before Stage 1 goldens settle |
 | OD-18 | Dev and demo platform | Expo web on a laptop for development; phone via Expo Go deferred — see [[16 Dev Environment]] | Before Stage 7 (V6 needs two devices) |
-| OD-20 | Which model provider the demo uses | Gemini `gemini-3.8-flash`, fallback `gemini-3.5-flash-lite`, per [[07 Agent Spec]]. Nemotron removed | Settled 2026-11-08 |
+| OD-20 | Which model provider the demo uses | Gemini `gemini-3.8-flash`, fallback `gemini-3.5-flash-lite`, per [[07 Agent Spec]]. Nemotron removed. Adapter built and proven against the real SDK in Stage 8 | Settled 2026-11-08 |
+| OD-21 | Whether a member can leave a household | **Open.** `createHousehold` refuses once you are a member and there is no inverse, so a wrong household is unrecoverable without clearing browser storage. Needs a decision about that member's transactions, items and goals — see the Stage 8 Build Log | Before the demo |
 | OD-19 | How the agent's shared secret is supplied | A module constant in `server/spacetime/src/agent-secret.ts`, committed with a dev value | Before any deploy that isn't local |

@@ -206,6 +206,21 @@ export default function ChatScreen() {
         </View>
       ) : null}
 
+      {/*
+        Never-stuck (Stage 8). The agent being *registered* is not the same as
+        its service being alive: if it dies mid-job the row stops changing and
+        the progress line above would sit there indefinitely. The job is still
+        trying, so this is an offer rather than an error — and the form reaches
+        exactly the same engine.
+      */}
+      {agent.stalled ? (
+        <Notice tone="warn">
+          The assistant has been quiet for {agent.quietSeconds} seconds. You don't have to
+          wait — "Something came up" below sets the event directly, and the projection is
+          identical either way.
+        </Notice>
+      ) : null}
+
       <SectionHeader>Say something</SectionHeader>
       <Field value={draft} onChangeText={setDraft} placeholder="We just found out…" />
       <Button

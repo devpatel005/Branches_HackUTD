@@ -440,6 +440,16 @@ export const agentJob = table(
     result: t.string(),
     /** Retries used. The spec allows one retry per tier before failing over. */
     attempts: t.i32(),
+    /**
+     * When `claimJob` set this job `running`, so a job abandoned by a service
+     * that died mid-flight can be found and recovered.
+     *
+     * Without it a crash between `claimJob` and `completeJob` left the row
+     * `running` forever — and because `claimJob` refuses while any job in the
+     * household is running, that wedged the agent for that household
+     * permanently, with both partners watching a spinner that would never stop.
+     */
+    claimedAt: t.option(t.timestamp()),
     /** Which model answered, so a failover is visible after the fact. */
     modelUsed: t.string(),
     /** The message that prompted this job, for threading the reply. */

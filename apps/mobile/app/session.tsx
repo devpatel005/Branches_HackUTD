@@ -225,6 +225,18 @@ export default function SessionScreen() {
         </View>
       ) : null}
 
+      {/*
+        The cards below carry engine template names whether or not the agent
+        ever answers, so a quiet assistant costs the naming and nothing else.
+        Saying so is what stops it reading as a frozen screen.
+      */}
+      {agent.stalled ? (
+        <Notice tone="warn">
+          The assistant has been quiet for {agent.quietSeconds} seconds. The paths below are
+          the engine's own and are safe to choose — only their names would have changed.
+        </Notice>
+      ) : null}
+
       {disagreement ? (
         <Notice tone="warn">
           You've picked different paths. Each of you can pin the one thing that matters most, and
@@ -279,7 +291,32 @@ export default function SessionScreen() {
 
       <SectionHeader>{branches.length === 0 ? 'Working it out' : 'Pick one'}</SectionHeader>
       {branches.length === 0 ? (
-        <Caption>Looking for paths forward…</Caption>
+        <>
+          <Caption>Looking for paths forward…</Caption>
+          {/*
+            Never-stuck (Stage 8). Branch cards normally arrive with engine
+            template names the moment candidates are generated, so an empty list
+            means generation itself produced nothing or never ran. Neither
+            resolves by waiting, and this was the one screen where waiting was
+            the only thing on offer.
+          */}
+          <Notice tone="warn">
+            No paths yet. Try again, or go back and adjust what's locked — the engine needs
+            at least one path that fits every constraint.
+          </Notice>
+          <Button
+            label="Try again"
+            variant="secondary"
+            onPress={() =>
+              run(async () => {
+                await generateCandidates({ sessionId: session.id });
+                await requestBranchNaming({ sessionId: session.id }).catch(() => undefined);
+              })
+            }
+            disabled={busy}
+          />
+          <Button label="Back to Chat" variant="quiet" onPress={() => router.replace('/chat')} />
+        </>
       ) : (
         branches.map(branch => (
           <BranchCard

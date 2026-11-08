@@ -20,6 +20,7 @@ export const AgentJob = __t.object("AgentJob", {
   progressText: __t.string(),
   result: __t.string(),
   attempts: __t.i32(),
+  claimedAt: __t.option(__t.timestamp()),
   modelUsed: __t.string(),
   promptMessageId: __t.option(__t.u64()),
   createdAt: __t.timestamp(),

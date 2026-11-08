@@ -3,6 +3,18 @@ tags: [branches, handoff, stage8]
 ---
 # 17 Stage 8 Handoff
 
+> **Superseded, 2026-11-08.** Pass 1 of Stage 8 is built: the Gemini adapter,
+> agent robustness, the never-stuck audit and reducer hardening are all done and
+> verified. **What actually happened, and what is left, is in the Stage 8 Build
+> Log** ([[Stage 8 - Polish and Demo Hardening]]) — read that first; this file is
+> kept as the plan it was working from, and for §7's gotchas, which are still
+> accurate.
+>
+> Two things changed from the plan below: the SDK findings in
+> [[14 Research Notes#Gemini]] were not in the spec and cost real time, and
+> **A8 is still PENDING** — the key in `Creds.md` is rejected as invalid, so it
+> needs a new one from AI Studio rather than more code.
+
 Working notes for the next session. Stages 0–7 are complete and committed; this
 is what Stage 8 is scoped to, the decisions already made, and the things that
 would otherwise have to be rediscovered.

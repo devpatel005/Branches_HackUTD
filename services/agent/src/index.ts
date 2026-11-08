@@ -27,8 +27,11 @@ import type { AgentContextInput } from './context.ts';
  * writes results back through agent-only reducers. That is why it can run on a
  * laptop during the demo, and why both partners see "Thinking…" at once.
  *
- *   npm run -w @branches/agent mock      # terminal 1, no API key needed
- *   AGENT_BASE_URL=http://127.0.0.1:8099/v1 npm run agent
+ *   npm run -w @branches/agent mock                      # terminal 1, no key
+ *   GEMINI_BASE_URL=http://127.0.0.1:8099 npm run agent   # terminal 2
+ *
+ * With a real key, nothing but the key:
+ *   GEMINI_API_KEY=... npm run agent
  */
 
 const HOST = process.env.SPACETIME_HOST ?? 'ws://127.0.0.1:3000';
@@ -43,6 +46,8 @@ const POLL_MS = Number(process.env.AGENT_POLL_MS ?? 400);
  * the point is that the couple watches the options appear.
  */
 const CARD_STAGGER_MS = Number(process.env.AGENT_CARD_STAGGER_MS ?? 450);
+/** How often to sweep for jobs abandoned by a dead service instance. */
+const RECLAIM_EVERY_MS = Number(process.env.AGENT_RECLAIM_MS ?? 30000);
 
 const SUBSCRIPTIONS = [
   'SELECT * FROM household',
@@ -70,10 +75,10 @@ function log(...parts: unknown[]): void {
 async function main(): Promise<void> {
   if (tiers.length === 0) {
     console.error(
-      'No model tier is configured. Set AGENT_API_KEY (or NVIDIA_API_KEY), or point\n' +
-        'AGENT_BASE_URL at the bundled mock:\n' +
+      'No model is configured. Set GEMINI_API_KEY, or point GEMINI_BASE_URL at the\n' +
+        'bundled mock, which needs no key:\n' +
         '  npm run -w @branches/agent mock\n' +
-        '  AGENT_BASE_URL=http://127.0.0.1:8099/v1 npm run agent'
+        '  GEMINI_BASE_URL=http://127.0.0.1:8099 npm run agent'
     );
     process.exit(1);
   }
@@ -89,10 +94,26 @@ async function main(): Promise<void> {
 
   // One job at a time per household (07 Agent Spec#Job flow). A simple poll
   // over the subscribed rows is enough and avoids racing the claim.
+  // Anything left `running` by a previous instance that died mid-job. Without
+  // this the module refuses every future claim for that household and both
+  // partners watch a spinner that will never stop — see `reclaimStaleJobs` in
+  // the module.
+  await reclaim(conn, 'start-up');
+
+  let lastReclaim = Date.now();
+
   for (;;) {
     // Follow a household created after start-up. `register` is a no-op unless
     // the target is strictly newer, so this neither hops nor re-registers.
     await register(conn);
+
+    // A job this instance abandoned is handled by `claimJob` itself, but a job
+    // abandoned by a *different* instance that is now gone needs someone to
+    // notice. We are the only client allowed to.
+    if (Date.now() - lastReclaim > RECLAIM_EVERY_MS) {
+      lastReclaim = Date.now();
+      await reclaim(conn, 'sweep');
+    }
 
     const job = nextQueuedJob(conn, identity);
     if (job) {
@@ -135,6 +156,25 @@ async function register(conn: Conn): Promise<void> {
     log(`serving household ${target.joinCode}`);
   } catch (error) {
     log('could not register:', error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * Ask the module to requeue or fail jobs left `running` by a dead instance.
+ *
+ * Cheap and idempotent: the module only touches rows past its own staleness
+ * threshold, and `setJobProgress` refreshes the claim, so a slow-but-alive job
+ * is never taken away from the instance working it.
+ */
+async function reclaim(conn: Conn, why: string): Promise<void> {
+  try {
+    await conn.reducers.reclaimJobs({});
+  } catch (error) {
+    // Not registered yet is the usual reason, and it is not worth a line of log
+    // on every sweep.
+    if (why === 'start-up') {
+      log('could not reclaim stale jobs:', error instanceof Error ? error.message : error);
+    }
   }
 }
 

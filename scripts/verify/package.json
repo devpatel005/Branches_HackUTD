@@ -14,6 +14,7 @@
     "verify:inference": "node --disable-warning=ExperimentalWarning inference.ts",
     "verify:flow": "node --disable-warning=ExperimentalWarning flow.ts",
     "verify:agent": "node --disable-warning=ExperimentalWarning agent.ts",
+    "verify:screens": "node --disable-warning=ExperimentalWarning screens.ts",
     "typecheck": "tsc -p tsconfig.json",
     "verify:agent:e2e": "node --disable-warning=ExperimentalWarning agent-e2e.ts",
     "verify:ready": "node --disable-warning=ExperimentalWarning ready.ts"

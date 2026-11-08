@@ -30,6 +30,7 @@ const SUITES: Suite[] = [
   { name: 'V4 Data flow', script: 'flow.ts', requiresServer: true, stage: 'Stage 2-5' },
   { name: 'V5 Agent contract', script: 'agent.ts', stage: 'Stage 6' },
   { name: 'V7 Ready check', script: 'ready.ts', requiresServer: true, stage: 'Stage 7' },
+  { name: 'V9 Never-stuck', script: 'screens.ts', stage: 'Stage 8' },
 ];
 
 const BOLD = '\x1b[1m';

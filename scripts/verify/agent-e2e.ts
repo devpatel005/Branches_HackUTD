@@ -185,6 +185,15 @@ checks.push(
       })
     ),
     true
+  ),
+  // Stage 8 added job recovery. It must not become a way for one partner to
+  // disturb the other's in-flight work, so it is agent-only like every other
+  // job reducer.
+  check(
+    'R5',
+    'a human cannot reclaim jobs',
+    await rejects(() => a.conn.reducers.reclaimJobs({})),
+    true
   )
 );
 
@@ -234,7 +243,11 @@ checks.push(
   check('E8', 'the agent is the author of the follow-up', agentMessage.authorMemberId, agentMember.id),
   check('E9', 'and it offers tap-able chips', agentMessage.chips.length > 0, true),
   check('E10', 'the follow-up reaches the partner too', [...b.conn.db.chatMessage.iter()].some(m => m.id === agentMessage.id), true),
-  check('E11', 'the question uses no advice language', /\bshould\b|\brecommend\b|best option/i.test(agentMessage.text), false)
+  check('E11', 'the question uses no advice language', /\bshould\b|\brecommend\b|best option/i.test(agentMessage.text), false),
+  // The claim stamp is what tells a stale job from a slow one. A finished job
+  // must not keep one, or the staleness sweep would eventually "recover" work
+  // that was already delivered.
+  check('E14', 'a finished job carries no claim stamp', finished.claimedAt, undefined)
 );
 
 // Answering the chips completes the event, and the impact can be computed.

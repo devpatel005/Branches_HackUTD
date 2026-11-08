@@ -1,15 +1,12 @@
 import { buildContext, logPrompt, type AgentContextInput } from './context.ts';
 import {
   callTier,
-  finishReasonOf,
-  reasoningOf,
-  textOf,
-  toolCallOf,
-  type ChatMessage,
+  timeoutMs,
+  type CallRequest,
+  type NormalisedResult,
   type Tier,
   type ToolSpec,
 } from './providers.ts';
-import { shouldFailover } from './providers.ts';
 import { SYSTEM_PROMPT } from './tools.ts';
 import type { ValidationFailure } from './validate.ts';
 
@@ -18,7 +15,14 @@ import type { ValidationFailure } from './validate.ts';
  * the error appended, then move to the next tier (07 Agent Spec#Validation).
  *
  * Every task goes through this one function, so the retry-then-failover policy
- * and the prompt logging cannot differ between tasks.
+ * and the prompt logging cannot differ between tasks — and because `callTier`
+ * normalises both providers, they cannot differ between providers either.
+ *
+ * The whole task is bounded in wall-clock time as well as in attempts. Attempts
+ * alone are not a bound: two tiers × two attempts × a 20s timeout is 80
+ * seconds, during which the job sits `running` and the couple sits watching a
+ * spinner. `AGENT_TASK_BUDGET_MS` caps the lot, and a tier whose timeout cannot
+ * fit in what is left is not started at all.
  */
 
 export type TaskOutcome<T> =
@@ -37,14 +41,20 @@ export type TaskSpec<T> = {
   maxTokens?: number;
 };
 
+export function taskBudgetMs(env: NodeJS.ProcessEnv = process.env): number {
+  const parsed = Number(env.AGENT_TASK_BUDGET_MS ?? 60000);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 60000;
+}
+
 export async function runTask<T>(
   tiers: readonly Tier[],
   spec: TaskSpec<T>,
   onProgress?: (text: string) => void
 ): Promise<TaskOutcome<T>> {
   const context = buildContext(spec.context);
+  const deadline = Date.now() + taskBudgetMs();
   let attempts = 0;
-  let lastReason = 'no tier available';
+  let lastReason = 'no model tier is configured';
 
   for (const tier of tiers) {
     // Two tries per tier: the first, then one retry with the validation error
@@ -52,64 +62,66 @@ export async function runTask<T>(
     let correction: string | null = null;
 
     for (let attempt = 0; attempt < 2; attempt++) {
+      if (Date.now() + timeoutMs() > deadline) {
+        // Starting a call that cannot finish inside the budget only delays the
+        // fallback the user actually needs.
+        lastReason = `out of time after ${attempts} attempt(s): ${lastReason}`;
+        return { ok: false, reason: lastReason, attempts };
+      }
+
       attempts++;
-      const messages = buildMessages(spec, context, correction);
-      logPrompt({ jobKind: spec.kind, tier: tier.label, messages, context });
+      const input = buildInput(spec, context, correction);
+      logPrompt({
+        jobKind: spec.kind,
+        tier: tier.label,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: input },
+        ],
+        context,
+      });
       onProgress?.(attempt === 0 ? 'Thinking…' : 'Having another look…');
 
-      const result = await callTier(tier, {
-        messages,
+      const request: CallRequest = {
+        system: SYSTEM_PROMPT,
+        input,
         tools: spec.tool ? [spec.tool] : undefined,
-        forceTool: spec.tool?.function.name,
+        forceTool: spec.tool?.name,
         maxTokens: spec.maxTokens,
-      });
+      };
 
-      if (!result.ok) {
-        lastReason = `tier ${tier.tier} (${tier.label}): ${result.status ?? ''} ${result.error}`.trim();
-        // A transport or quota failure is not the model's fault, so there is
-        // nothing to correct — go straight to the next tier.
-        if (result.status === undefined || shouldFailover(result.status)) break;
+      const call = await callTier(tier, request);
+
+      if (!call.ok) {
+        lastReason = `tier ${tier.tier} (${tier.label}): ${call.status ?? ''} ${call.error}`.trim();
+        // A transport, quota or rate-limit failure is not the model's fault, so
+        // there is nothing to correct — the next tier is the only useful move.
         break;
       }
 
-      const completion = result.completion;
-
-      // Thinking on would eat the token budget and return nothing usable, so
-      // treat it as a tier failure rather than a validation failure.
-      if (reasoningOf(completion)) {
-        lastReason = `tier ${tier.tier}: returned reasoning content — thinking is not off`;
-        break;
-      }
-      if (finishReasonOf(completion) === 'length') {
-        lastReason = `tier ${tier.tier}: response hit the token limit`;
+      const result = call.result;
+      const tierFailure = unusable(result, tier);
+      if (tierFailure) {
+        lastReason = tierFailure;
         break;
       }
 
       let args: unknown = {};
       if (spec.tool) {
-        const call = toolCallOf(completion);
-        if (!call) {
+        if (!result.toolCall) {
           correction = 'You must call the provided tool. Do not reply with prose.';
-          lastReason = `tier ${tier.tier}: no tool call`;
+          lastReason = `tier ${tier.tier}: no tool call (status ${result.rawStatus})`;
           continue;
         }
-        if (call.function.name !== spec.tool.function.name) {
-          correction = `Call ${spec.tool.function.name}, not ${call.function.name}.`;
-          lastReason = `tier ${tier.tier}: wrong tool`;
+        if (result.toolCall.name !== spec.tool.name) {
+          correction = `Call ${spec.tool.name}, not ${result.toolCall.name}.`;
+          lastReason = `tier ${tier.tier}: wrong tool (${result.toolCall.name})`;
           continue;
         }
-        try {
-          args = JSON.parse(call.function.arguments);
-        } catch (error) {
-          correction = `Your tool arguments were not valid JSON: ${
-            error instanceof Error ? error.message : String(error)
-          }`;
-          lastReason = `tier ${tier.tier}: unparsable arguments`;
-          continue;
-        }
+        args = result.toolCall.arguments;
       }
 
-      const parsed = spec.parse(args, textOf(completion));
+      const parsed = spec.parse(args, result.text);
       if (parsed.ok) {
         return { ok: true, value: parsed.value, modelUsed: tier.model, attempts };
       }
@@ -123,27 +135,48 @@ export async function runTask<T>(
 }
 
 /**
- * The message list.
+ * Whether an answer is unusable for reasons no correction can fix — in which
+ * case the next tier, not a retry, is the right move.
  *
- * The engine data goes in as JSON in the user turn, which keeps the numbers the
- * model is allowed to use in exactly one place — and lets the validator check
- * its reply against that same object.
- *
- * Strict user/assistant alternation, which the NVIDIA gateway requires
- * (14 Research Notes#Nemotron): a correction is appended to the user turn
- * rather than added as an extra turn.
+ * `incomplete` is the one that matters in practice: the output budget includes
+ * thinking tokens, so hitting it returns truncated or empty content with a
+ * 200 OK (07 Agent Spec#Model configuration). Retrying the same tier would hit
+ * the same ceiling; the next tier thinks less, so it may not.
  */
-function buildMessages<T>(
-  spec: TaskSpec<T>,
-  context: unknown,
-  correction: string | null
-): ChatMessage[] {
+function unusable(result: NormalisedResult, tier: Tier): string | null {
+  if (result.status === 'incomplete') {
+    return `tier ${tier.tier}: ended incomplete — output budget hit, answer truncated`;
+  }
+  if (result.status === 'failed') {
+    return `tier ${tier.tier}: provider reported ${result.rawStatus}`;
+  }
+  if (result.status === 'unknown') {
+    return `tier ${tier.tier}: unexpected status ${result.rawStatus}`;
+  }
+  // An OpenAI-compatible provider with thinking left on spends the token budget
+  // on reasoning and returns nothing usable. Gemini never reports this — its
+  // thinking is configured by `thinking_level`, not leaked into the answer.
+  if (result.reasoning) {
+    return `tier ${tier.tier}: returned reasoning content — thinking is not off`;
+  }
+  return null;
+}
+
+/**
+ * The prompt body.
+ *
+ * The engine data goes in as JSON, which keeps the numbers the model is allowed
+ * to use in exactly one place — and lets the validator check its reply against
+ * that same object.
+ *
+ * A correction is appended to this one block rather than added as another turn,
+ * which is both what Gemini's single `input` wants and what keeps strict
+ * user/assistant alternation for OpenAI-compatible gateways.
+ */
+function buildInput<T>(spec: TaskSpec<T>, context: unknown, correction: string | null): string {
   const parts = [spec.instruction, '', 'Data you may use:', JSON.stringify(context, null, 2)];
   if (correction) {
     parts.push('', `IMPORTANT: ${correction}`);
   }
-  return [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: parts.join('\n') },
-  ];
+  return parts.join('\n');
 }
