@@ -130,6 +130,15 @@ export type MonthSample = {
   goalBalances: Readonly<Record<string, number>>;
   /** Surplus for the month; may be negative. */
   surplus: number;
+  /**
+   * Emergency fund plus every unsettled goal balance — all the money set aside.
+   *
+   * This is the single line the projection chart plots (09 Design System). It
+   * rises as contributions accumulate and visibly **drops** when a goal
+   * settles, because the goal's balance is spent on the goal. That dip is what
+   * makes a goal marker on the line mean something.
+   */
+  totalSavings: number;
 };
 
 export type SimulationOutput = {

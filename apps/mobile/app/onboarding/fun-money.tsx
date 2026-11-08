@@ -54,7 +54,6 @@ export default function FunMoneyScreen() {
 
   const setFunMoney = useReducer(reducers.setFunMoney);
   const setFunMoneyStatus = useReducer(reducers.setFunMoneyStatus);
-  const finishOnboarding = useReducer(reducers.finishOnboarding);
 
   const [cents, setCents] = useState(funMoney?.monthlyCents ?? DEFAULT_CENTS);
   const [purchases, setPurchases] = useState<PrivatePurchase[]>([]);
@@ -85,8 +84,8 @@ export default function FunMoneyScreen() {
       await setFunMoney({ monthlyCents: cents });
       // Computed here, on the owner's device, from data that never leaves it.
       await setFunMoneyStatus({ status, carryoverCents });
-      await finishOnboarding();
-      router.replace('/');
+      // Goals are step 4 and the last one; it calls finishOnboarding.
+      router.push('/onboarding/goals');
     } catch (e) {
       setError(messageOf(e));
     }
@@ -151,7 +150,7 @@ export default function FunMoneyScreen() {
 
       {error ? <Notice tone="warn">{error}</Notice> : null}
 
-      <Button label="Done" onPress={saveAndContinue} />
+      <Button label="Next" onPress={saveAndContinue} />
 
       <View style={styles.progressRow}>
         {progress.partners.map(p => (

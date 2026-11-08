@@ -64,6 +64,19 @@ export const GapQuestion = __t.object("GapQuestion", {
 });
 export type GapQuestion = __Infer<typeof GapQuestion>;
 
+export const Goal = __t.object("Goal", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  title: __t.string(),
+  icon: __t.string(),
+  costTodayCents: __t.i32(),
+  targetMonth: __t.i32(),
+  priority: __t.string(),
+  createdBy: __t.u64(),
+  status: __t.string(),
+});
+export type Goal = __Infer<typeof Goal>;
+
 export const Household = __t.object("Household", {
   id: __t.u64(),
   joinCode: __t.string(),
@@ -121,6 +134,15 @@ export type MemberProgress = __Infer<typeof MemberProgress>;
 
 export const OnboardingProgress = __t.object("OnboardingProgress", {});
 export type OnboardingProgress = __Infer<typeof OnboardingProgress>;
+
+export const PlanProjection = __t.object("PlanProjection", {
+  householdId: __t.u64(),
+  version: __t.i32(),
+  json: __t.string(),
+  updatedAt: __t.timestamp(),
+  lastChangedBy: __t.option(__t.u64()),
+});
+export type PlanProjection = __Infer<typeof PlanProjection>;
 
 export const Transaction = __t.object("Transaction", {
   id: __t.u64(),

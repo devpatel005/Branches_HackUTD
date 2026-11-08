@@ -1,64 +1,79 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useReducer } from 'spacetimedb/react';
-import { reducers } from '@branches/bindings';
 import {
   Avatar,
   Body,
   Button,
   Caption,
-  Hero,
+  Loading,
   Notice,
   Row,
   Screen,
   SectionHeader,
-  Title,
 } from '../../src/components';
+import { ProjectionChart, type ChartPoint } from '../../src/chart';
+import { Pulse } from '../../src/pulse';
+import { ShowTheMath } from '../../src/sheets';
+import { GoalDetailSheet, AssumptionsSheet } from '../../src/plan-sheets';
+import { memberColor, useHousehold, useHouseholdMembers, useMe } from '../../src/household';
 import {
-  memberColor,
-  useBaseline,
-  useHousehold,
-  useHouseholdMembers,
-  useMyFunMoney,
-} from '../../src/household';
+  goalResult,
+  planMonthLabel,
+  provenanceFor,
+  useGoals,
+  useProjection,
+} from '../../src/projection';
 import { dollars, perMonth } from '../../src/format';
-import { space } from '../../src/theme';
+import { colors, space, tabularNums, type as typeScale } from '../../src/theme';
 
 /**
- * Home — a Stage 2 placeholder.
+ * Home — 10 Screens#Home.
  *
- * It shows the confirmed baseline so onboarding can be seen to have worked.
- * The real Home (hero "Free to plan", the scrubbable projection chart, the stat
- * row and the goal list) arrives in Stage 3, once goals exist and the engine
- * runs inside `recomputeProjection` (10 Screens#Home).
+ * One big number (free to plan), the scrubbable projection line, a stat row and
+ * the goal list. Every number here opens "Show the Math" from the engine's
+ * provenance; none of them is computed in this file.
  */
 export default function HomeScreen() {
   const router = useRouter();
+  const { me } = useMe();
   const household = useHousehold();
   const members = useHouseholdMembers();
-  const { baseline } = useBaseline();
-  const { funMoney } = useMyFunMoney();
+  const { projection, version, lastChangedBy, ready } = useProjection();
+  const { goals } = useGoals();
 
-  const reseed = useReducer(reducers.reseedHousehold);
-  const [error, setError] = useState<string | null>(null);
+  const [math, setMath] = useState<{ label: string; path: string } | null>(null);
+  const [openGoalId, setOpenGoalId] = useState<bigint | null>(null);
+  const [assumptionsOpen, setAssumptionsOpen] = useState(false);
+  const [scrub, setScrub] = useState<ChartPoint | null>(null);
 
-  if (!household) return <Screen><Caption>Connecting…</Caption></Screen>;
+  if (!household) return <Loading label="Connecting…" />;
+  if (!projection && !ready) return <Loading label="Working out your plan…" />;
 
-  const incomeTotal = (baseline?.incomeByMember ?? []).reduce((sum, m) => sum + m.cents, 0);
-  const funMoneyTotal = members.length * (funMoney?.monthlyCents ?? 0);
+  // The actor's colour, but only when it was the *other* partner — your own
+  // edits should not pulse back at you.
+  const actor = lastChangedBy !== undefined && lastChangedBy !== me?.id
+    ? members.find(m => m.id === lastChangedBy)
+    : undefined;
+  const pulseColor = actor ? memberColor(actor.colorKey) : undefined;
 
-  // Shown, not computed here: Stage 3 moves this to the engine's `freeToPlan`,
-  // which carries provenance. Until then it is labelled as a raw subtotal so
-  // nobody mistakes it for a projection (02 Ground Rules #1).
-  const surplus = baseline
-    ? incomeTotal -
-      baseline.fixedCents -
-      baseline.debtCents -
-      baseline.flexibleCents -
-      baseline.retirementCents -
-      funMoneyTotal
-    : 0;
+  const points: ChartPoint[] =
+    projection?.series.monthly.map(s => ({ month: s.month, value: s.totalSavings })) ?? [];
+
+  const markers =
+    projection?.goals.map(g => {
+      const row = goals.find(x => String(x.id) === g.id);
+      return { month: g.settleMonth, label: row?.title ?? g.id, atRisk: !g.funded };
+    }) ?? [];
+
+  const atRisk = (projection?.atRiskGoalIds.length ?? 0) > 0;
+
+  // While scrubbing, the hero shows the value at that point and the date
+  // replaces the caption (09 Design System#Signature components).
+  const heroValue = scrub ? dollars(Math.round(scrub.value * 100)) : dollars(Math.round((projection?.freeToPlan ?? 0) * 100));
+  const heroCaption = scrub
+    ? `Projected savings · ${planMonthLabel(household.currentMonth, scrub.month)}`
+    : 'Free to plan each month';
 
   return (
     <Screen>
@@ -73,68 +88,121 @@ export default function HomeScreen() {
             />
           ))}
         </View>
-        <Caption>Code {household.joinCode}</Caption>
+        <Pressable onPress={() => setAssumptionsOpen(true)}>
+          <Caption>Assumptions</Caption>
+        </Pressable>
       </View>
 
-      {baseline ? (
+      <Pulse watch={version} color={pulseColor} style={styles.heroBlock}>
+        <Pressable
+          onPress={() => (scrub ? undefined : setMath({ label: 'Free to plan', path: 'freeToPlan' }))}
+        >
+          <Text style={[styles.display, tabularNums, atRisk && !scrub ? styles.displayAtRisk : null]}>
+            {heroValue}
+          </Text>
+          <Caption>{heroCaption}</Caption>
+        </Pressable>
+      </Pulse>
+
+      <ProjectionChart
+        points={points}
+        markers={markers}
+        atRisk={atRisk}
+        floor={projection?.emergencyFloor}
+        onScrub={setScrub}
+      />
+      <Caption>
+        Total set aside over ten years. Drag to scrub; dots are goals being paid for.
+      </Caption>
+
+      <View style={styles.statRow}>
+        <Stat
+          label="Emergency fund"
+          value={`${projection?.emergencyMonthsMin.months.toFixed(1) ?? '—'} mo`}
+          hint="lowest point"
+          onPress={() => setMath({ label: 'Emergency-fund months', path: 'emergencyMonthsMin' })}
+        />
+        <Stat
+          label="Tight years"
+          value={String(projection?.tightYears.length ?? 0)}
+          tone={(projection?.tightYears.length ?? 0) > 0 ? colors.caution : undefined}
+          onPress={() => setMath({ label: 'Tight years', path: 'tightYears' })}
+        />
+        <Stat
+          label="Goals on track"
+          value={`${projection?.goalsOnTrack.funded ?? 0}/${projection?.goalsOnTrack.total ?? 0}`}
+          onPress={() => setMath({ label: 'Goals on track', path: 'goalsOnTrack' })}
+        />
+      </View>
+
+      <SectionHeader>Goals</SectionHeader>
+      {goals.length === 0 ? (
         <>
-          <Hero value={dollars(surplus)} caption="left over each month, before goals" />
-
-          <SectionHeader>Every month</SectionHeader>
-          {(baseline.incomeByMember ?? []).map(entry => {
-            const member = members.find(m => m.id === entry.memberId);
-            return (
-              <Row
-                key={String(entry.memberId)}
-                label={`${member?.displayName ?? 'Partner'} — income`}
-                value={perMonth(entry.cents)}
-              />
-            );
-          })}
-          <Row label="Bills" value={perMonth(baseline.fixedCents)} />
-          <Row label="Loan payments" value={perMonth(baseline.debtCents)} />
-          <Row label="Everyday spending" value={perMonth(baseline.flexibleCents)} />
-          <Row label="Set aside for retirement" value={perMonth(baseline.retirementCents)} />
-          <Row
-            label="Fun money"
-            sublabel="amount shared, purchases private"
-            value={perMonth(funMoneyTotal)}
-          />
-
-          <SectionHeader>Savings</SectionHeader>
-          <Row label="Liquid savings" value={dollars(baseline.liquidSavingsCents)} />
+          <Notice>No goals yet. Add them on the Timeline tab to see the plan take shape.</Notice>
+          <Button label="Go to Timeline" variant="secondary" onPress={() => router.push('/timeline')} />
         </>
       ) : (
-        <Notice>No confirmed baseline yet. Finish onboarding to see it here.</Notice>
+        goals.map(goal => {
+          const result = goalResult(projection, goal.id);
+          return (
+            <Row
+              key={String(goal.id)}
+              label={`${goal.title}${goal.priority === 'must' ? ' · must-have' : ''}`}
+              sublabel={`${planMonthLabel(household.currentMonth, goal.targetMonth)} · ${dollars(goal.costTodayCents)} today`}
+              value={result ? perMonth(Math.round(result.requiredMonthlyAtStart * 100)) : '—'}
+              onPress={() => setOpenGoalId(goal.id)}
+              right={
+                <View
+                  style={[
+                    styles.statusDot,
+                    { backgroundColor: result?.funded === false ? colors.negative : colors.accent },
+                  ]}
+                />
+              }
+            />
+          );
+        })
       )}
 
-      <SectionHeader>Next</SectionHeader>
-      <Body dim>
-        Goals, the ten-year projection and "show the math" arrive in the next stage.
-      </Body>
+      <SectionHeader>Something came up?</SectionHeader>
+      <Body dim>Life events and branches arrive in the next stage.</Body>
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
-
-      <SectionHeader>Dev</SectionHeader>
-      <Button
-        label="Reset onboarding (keeps the household)"
-        variant="secondary"
-        onPress={async () => {
-          setError(null);
-          try {
-            await reseed();
-            router.replace('/onboarding/confirm');
-          } catch (e) {
-            const text = e instanceof Error ? e.message : String(e);
-            setError(text.replace(/^.*SenderError:\s*/, ''));
-          }
-        }}
+      <ShowTheMath
+        visible={math !== null}
+        onClose={() => setMath(null)}
+        label={math?.label ?? ''}
+        record={math ? provenanceFor(projection, math.path) : undefined}
       />
-      <Notice>
-        Clears inferred items, gap answers and fun money, then sends both devices back through
-        onboarding. The join code and both members survive, so the two devices stay paired.
-      </Notice>
+      <GoalDetailSheet goalId={openGoalId} onClose={() => setOpenGoalId(null)} />
+      <AssumptionsSheet visible={assumptionsOpen} onClose={() => setAssumptionsOpen(false)} />
     </Screen>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  hint,
+  tone,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${value}. Show the math.`}
+      style={({ pressed }) => [styles.stat, pressed && { opacity: 0.6 }]}
+    >
+      <Text style={styles.statLabel}>{label}</Text>
+      <Text style={[styles.statValue, tabularNums, tone ? { color: tone } : null]}>{value}</Text>
+      {hint ? <Text style={styles.statHint}>{hint}</Text> : null}
+    </Pressable>
   );
 }
 
@@ -146,4 +214,18 @@ const styles = StyleSheet.create({
     marginBottom: space.lg,
   },
   avatars: { flexDirection: 'row', gap: space.sm },
+  heroBlock: { marginBottom: space.sm },
+  display: { ...typeScale.display, color: colors.textPrimary },
+  displayAtRisk: { color: colors.negative },
+  statRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: space.lg,
+    gap: space.sm,
+  },
+  stat: { flex: 1 },
+  statLabel: { ...typeScale.caption, color: colors.textSecondary },
+  statValue: { ...typeScale.headline, color: colors.textPrimary, marginTop: 2 },
+  statHint: { ...typeScale.caption, color: colors.textSecondary, marginTop: 2 },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
 });

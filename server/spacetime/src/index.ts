@@ -6,9 +6,16 @@ import {
   f1SavingsNoInterest,
   followUpForGapAnswer,
   inferBaseline,
+  isLiquidSavingsQuestion,
+  liquidSavingsFromRange,
+  liquidSavingsGapQuestion,
+  simulate,
   toIntegerCents,
+  type Assumptions,
+  type Baseline,
   type CounterpartyType,
   type GapQuestion,
+  type Goal,
   type InferredItem,
   type Transaction,
 } from '@branches/engine';
@@ -177,7 +184,7 @@ function makeJoinCode(ctx: Ctx): string {
   throw new SenderError('could not allocate a join code; try again');
 }
 
-function recomputeBaseline(ctx: Ctx, householdId: bigint): void {
+function recomputeBaseline(ctx: Ctx, householdId: bigint, changedBy?: bigint): void {
   const members = [...ctx.db.member.householdId.filter(householdId)].filter(
     m => m.role === 'member'
   );
@@ -201,9 +208,12 @@ function recomputeBaseline(ctx: Ctx, householdId: bigint): void {
   }
 
   const existing = ctx.db.baseline.householdId.find(householdId);
-  const liquidSavings = existing
-    ? existing.liquidSavingsCents / 100
-    : TEST_HOUSEHOLD_A_LIQUID_SAVINGS;
+  // An answered range wins; otherwise keep whatever is stored (seeded for the
+  // demo household), falling back to the fixture only on a fresh row.
+  const answeredLiquid = liquidSavingsFromAnswers(ctx, householdId);
+  const liquidSavings =
+    answeredLiquid ??
+    (existing ? existing.liquidSavingsCents / 100 : TEST_HOUSEHOLD_A_LIQUID_SAVINGS);
 
   const next = baselineFromItems(items, funMoneyByMember, liquidSavings);
 
@@ -223,6 +233,103 @@ function recomputeBaseline(ctx: Ctx, householdId: bigint): void {
 
   if (existing) ctx.db.baseline.householdId.update(row);
   else ctx.db.baseline.insert(row);
+
+  // 05 Data Model#Rules: anything that moves the baseline must recompute the
+  // projection, so a client can never read one that disagrees with the other.
+  recomputeProjection(ctx, householdId, changedBy);
+}
+
+/** Sum of the answered liquid-savings ranges, or null when none are answered. */
+function liquidSavingsFromAnswers(ctx: Ctx, householdId: bigint): number | null {
+  let total = 0;
+  let answered = false;
+  for (const q of [...ctx.db.gapQuestion.householdId.filter(householdId)]) {
+    if (!isLiquidSavingsQuestion(q.subject)) continue;
+    if (q.answer === undefined || q.answer === null) continue;
+    const dollars = liquidSavingsFromRange(q.answer);
+    if (dollars === null) continue;
+    total += dollars;
+    answered = true;
+  }
+  return answered ? total : null;
+}
+
+function assumptionsFor(ctx: Ctx, householdId: bigint): Assumptions {
+  const row = ctx.db.assumption.householdId.find(householdId);
+  if (!row) return DEFAULT_ASSUMPTIONS;
+  return {
+    savingsRateAnnual: row.savingsRateBps / 10000,
+    inflationAnnual: row.inflationBps / 10000,
+    mortgageRateAnnual: row.mortgageRateBps / 10000,
+    carRateAnnual: row.carRateBps / 10000,
+  };
+}
+
+/**
+ * Run the engine and store the projection (05 Data Model#Rules: any reducer that
+ * changes goals, assumptions, baseline or the committed plan calls this).
+ *
+ * The engine runs **here**, inside the reducer, which is what keeps every number
+ * a user sees traceable to `packages/engine` (02 Ground Rules #1 and #7). The
+ * reducer's only job is converting integer cents and basis points into the
+ * engine's dollars and rates, and storing what comes back.
+ */
+function recomputeProjection(ctx: Ctx, householdId: bigint, changedBy?: bigint): void {
+  const baselineRow = ctx.db.baseline.householdId.find(householdId);
+  if (!baselineRow) return;
+
+  const members = [...ctx.db.member.householdId.filter(householdId)].filter(
+    m => m.role === 'member'
+  );
+
+  const incomeByMember: Record<string, number> = {};
+  for (const entry of baselineRow.incomeByMember) {
+    incomeByMember[String(entry.memberId)] = entry.cents / 100;
+  }
+  // A member with no confirmed income still has to exist in the map, or the
+  // simulation silently drops their fun money and income override slots.
+  for (const m of members) {
+    if (incomeByMember[String(m.id)] === undefined) incomeByMember[String(m.id)] = 0;
+  }
+
+  const funMoneyByMember: Record<string, number> = {};
+  for (const m of members) {
+    const fun = ctx.db.funMoney.memberId.find(m.id);
+    funMoneyByMember[String(m.id)] = fun ? fun.monthlyCents / 100 : 0;
+  }
+
+  const baseline: Baseline = {
+    incomeByMember,
+    fixed: baselineRow.fixedCents / 100,
+    debt: baselineRow.debtCents / 100,
+    flexible: baselineRow.flexibleCents / 100,
+    funMoneyByMember,
+    retirement: baselineRow.retirementCents / 100,
+    liquidSavings: baselineRow.liquidSavingsCents / 100,
+  };
+
+  const goals: Goal[] = [...ctx.db.goal.householdId.filter(householdId)]
+    .filter(g => g.status === 'active')
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .map(g => ({
+      id: String(g.id),
+      costToday: g.costTodayCents / 100,
+      targetMonth: g.targetMonth,
+      priority: g.priority === 'must' ? 'must' : 'flex',
+    }));
+
+  const output = simulate({ baseline, goals, assumptions: assumptionsFor(ctx, householdId) });
+
+  const existing = ctx.db.planProjection.householdId.find(householdId);
+  const row = {
+    householdId,
+    version: (existing?.version ?? 0) + 1,
+    json: JSON.stringify(output),
+    updatedAt: ctx.timestamp,
+    lastChangedBy: changedBy,
+  };
+  if (existing) ctx.db.planProjection.householdId.update(row);
+  else ctx.db.planProjection.insert(row);
 }
 
 // ---------------------------------------------------------------------------
@@ -448,7 +555,16 @@ export const runInference = spacetimedb.reducer(ctx => {
     });
   });
 
-  for (const q of result.gapQuestions) {
+  // Inference reports gaps it *found* in the transactions. A liquid-savings
+  // balance is never visible in a transaction stream, so it is asked of every
+  // member regardless — which is also why it is not part of inferBaseline's
+  // output, and why 11 Mock Data can keep expecting exactly 2 inferred gaps.
+  const allQuestions: GapQuestion[] = [
+    ...result.gapQuestions,
+    ...[...identityByMemberId.keys()].sort().map(memberId => liquidSavingsGapQuestion(memberId)),
+  ];
+
+  for (const q of allQuestions) {
     const ownerIdentity = identityByMemberId.get(q.ownerMemberId);
     if (!ownerIdentity) continue;
     ctx.db.gapQuestion.insert({
@@ -465,7 +581,7 @@ export const runInference = spacetimedb.reducer(ctx => {
     });
   }
 
-  recomputeBaseline(ctx, householdId);
+  recomputeBaseline(ctx, householdId, caller.id);
 });
 
 /** Only the owner may touch their own inferred item. */
@@ -480,7 +596,7 @@ function requireOwnItem(ctx: Ctx, itemId: bigint) {
 export const confirmItem = spacetimedb.reducer({ itemId: t.u64() }, (ctx, { itemId }) => {
   const { caller, item } = requireOwnItem(ctx, itemId);
   ctx.db.inferredItem.id.update({ ...item, status: 'confirmed' });
-  recomputeBaseline(ctx, caller.householdId);
+  recomputeBaseline(ctx, caller.householdId, caller.id);
 });
 
 export const editItem = spacetimedb.reducer(
@@ -489,14 +605,14 @@ export const editItem = spacetimedb.reducer(
     const { caller, item } = requireOwnItem(ctx, itemId);
     if (monthlyCents < 0) throw new SenderError('an amount cannot be negative');
     ctx.db.inferredItem.id.update({ ...item, monthlyCents, status: 'edited' });
-    recomputeBaseline(ctx, caller.householdId);
+    recomputeBaseline(ctx, caller.householdId, caller.id);
   }
 );
 
 export const rejectItem = spacetimedb.reducer({ itemId: t.u64() }, (ctx, { itemId }) => {
   const { caller, item } = requireOwnItem(ctx, itemId);
   ctx.db.inferredItem.id.update({ ...item, status: 'rejected' });
-  recomputeBaseline(ctx, caller.householdId);
+  recomputeBaseline(ctx, caller.householdId, caller.id);
 });
 
 /** Confirm every still-pending item of the caller's, for the "looks right" tap. */
@@ -507,7 +623,7 @@ export const confirmAllMyItems = spacetimedb.reducer(ctx => {
       ctx.db.inferredItem.id.update({ ...item, status: 'confirmed' });
     }
   }
-  recomputeBaseline(ctx, caller.householdId);
+  recomputeBaseline(ctx, caller.householdId, caller.id);
 });
 
 /**
@@ -566,7 +682,7 @@ export const answerGap = spacetimedb.reducer(
       }
     }
 
-    recomputeBaseline(ctx, caller.householdId);
+    recomputeBaseline(ctx, caller.householdId, caller.id);
   }
 );
 
@@ -585,7 +701,7 @@ export const setFunMoney = spacetimedb.reducer(
         status: 'within',
         carryoverCents: 0,
       });
-    recomputeBaseline(ctx, caller.householdId);
+    recomputeBaseline(ctx, caller.householdId, caller.id);
   }
 );
 
@@ -641,11 +757,154 @@ export const reseedHousehold = spacetimedb.reducer(ctx => {
   for (const row of [...ctx.db.funMoney.householdId.filter(householdId)]) {
     ctx.db.funMoney.memberId.delete(row.memberId);
   }
+  for (const row of [...ctx.db.goal.householdId.filter(householdId)]) {
+    ctx.db.goal.id.delete(row.id);
+  }
+  const projection = ctx.db.planProjection.householdId.find(householdId);
+  if (projection) ctx.db.planProjection.householdId.delete(householdId);
+
   const h = ctx.db.household.id.find(householdId);
   if (h) ctx.db.household.id.update({ ...h, onboarded: false });
 
-  recomputeBaseline(ctx, householdId);
+  recomputeBaseline(ctx, householdId, caller.id);
 });
+
+// ---------------------------------------------------------------------------
+// Goals and assumptions (Stage 3)
+// ---------------------------------------------------------------------------
+
+const MAX_GOALS = 12;
+
+function validateGoal(title: string, costTodayCents: number, targetMonth: number, priority: string) {
+  if (!title.trim()) throw new SenderError('a goal needs a name');
+  if (costTodayCents <= 0) throw new SenderError('a goal needs a cost above zero');
+  if (!Number.isInteger(targetMonth) || targetMonth < 1 || targetMonth > 120) {
+    throw new SenderError('a target month must be between 1 and 120');
+  }
+  if (priority !== 'must' && priority !== 'flex') {
+    throw new SenderError('priority must be "must" or "flex"');
+  }
+}
+
+/**
+ * Either partner may add a goal, and both see it immediately.
+ *
+ * OPEN(OD-4): only committing a branch needs agreement from everyone, so adding
+ * a goal deliberately does not.
+ */
+export const addGoal = spacetimedb.reducer(
+  {
+    title: t.string(),
+    icon: t.string(),
+    costTodayCents: t.i32(),
+    targetMonth: t.i32(),
+    priority: t.string(),
+  },
+  (ctx, { title, icon, costTodayCents, targetMonth, priority }) => {
+    const caller = requireHuman(ctx);
+    validateGoal(title, costTodayCents, targetMonth, priority);
+
+    const existing = [...ctx.db.goal.householdId.filter(caller.householdId)].filter(
+      g => g.status === 'active'
+    );
+    if (existing.length >= MAX_GOALS) {
+      throw new SenderError(`a plan holds at most ${MAX_GOALS} goals`);
+    }
+
+    ctx.db.goal.insert({
+      id: 0n,
+      householdId: caller.householdId,
+      title: title.trim(),
+      icon,
+      costTodayCents,
+      targetMonth,
+      priority,
+      createdBy: caller.id,
+      status: 'active',
+    });
+    recomputeProjection(ctx, caller.householdId, caller.id);
+  }
+);
+
+export const editGoal = spacetimedb.reducer(
+  {
+    goalId: t.u64(),
+    title: t.string(),
+    costTodayCents: t.i32(),
+    targetMonth: t.i32(),
+    priority: t.string(),
+  },
+  (ctx, { goalId, title, costTodayCents, targetMonth, priority }) => {
+    const caller = requireHuman(ctx);
+    const existing = ctx.db.goal.id.find(goalId);
+    if (!existing) throw new SenderError('goal not found');
+    if (existing.householdId !== caller.householdId) {
+      throw new SenderError('that goal is not in your household');
+    }
+    validateGoal(title, costTodayCents, targetMonth, priority);
+
+    ctx.db.goal.id.update({
+      ...existing,
+      title: title.trim(),
+      costTodayCents,
+      targetMonth,
+      priority,
+    });
+    recomputeProjection(ctx, caller.householdId, caller.id);
+  }
+);
+
+export const removeGoal = spacetimedb.reducer({ goalId: t.u64() }, (ctx, { goalId }) => {
+  const caller = requireHuman(ctx);
+  const existing = ctx.db.goal.id.find(goalId);
+  if (!existing) throw new SenderError('goal not found');
+  if (existing.householdId !== caller.householdId) {
+    throw new SenderError('that goal is not in your household');
+  }
+  ctx.db.goal.id.delete(goalId);
+  recomputeProjection(ctx, caller.householdId, caller.id);
+});
+
+/**
+ * Assumptions are editable per household and shown wherever they are used
+ * (02 Ground Rules #8). Editing one recomputes the plan for both partners.
+ *
+ * Basis points, so an assumption is an integer like every other stored number.
+ */
+export const setAssumptions = spacetimedb.reducer(
+  {
+    savingsRateBps: t.i32(),
+    inflationBps: t.i32(),
+    mortgageRateBps: t.i32(),
+    carRateBps: t.i32(),
+  },
+  (ctx, { savingsRateBps, inflationBps, mortgageRateBps, carRateBps }) => {
+    const caller = requireHuman(ctx);
+    for (const [name, value] of [
+      ['savings rate', savingsRateBps],
+      ['inflation', inflationBps],
+      ['mortgage rate', mortgageRateBps],
+      ['car rate', carRateBps],
+    ] as const) {
+      // 0% is legitimate (06 Engine Spec defines the r = 0 behaviour); 50% is
+      // not, and a typo there would quietly produce nonsense projections.
+      if (value < 0 || value > 5000) {
+        throw new SenderError(`${name} must be between 0% and 50%`);
+      }
+    }
+    const existing = ctx.db.assumption.householdId.find(caller.householdId);
+    const row = {
+      householdId: caller.householdId,
+      savingsRateBps,
+      inflationBps,
+      mortgageRateBps,
+      carRateBps,
+    };
+    if (existing) ctx.db.assumption.householdId.update(row);
+    else ctx.db.assumption.insert(row);
+    recomputeProjection(ctx, caller.householdId, caller.id);
+  }
+);
 
 // ---------------------------------------------------------------------------
 // Stage 0 sync canary — see schema.ts

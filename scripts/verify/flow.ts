@@ -34,6 +34,8 @@ const SUBSCRIPTIONS = [
   'SELECT * FROM fun_money',
   'SELECT * FROM baseline',
   'SELECT * FROM onboarding_progress',
+  'SELECT * FROM goal',
+  'SELECT * FROM plan_projection',
 ];
 
 type Client = { label: string; conn: DbConnection; identity: Identity };
@@ -97,6 +99,22 @@ const rows = {
   funMoney: (c: Client) => [...c.conn.db.funMoney.iter()],
 };
 
+/**
+ * Household-scoped readers for the **shared** tables.
+ *
+ * `transaction`, `inferred_item` and `gap_question` are already narrowed per
+ * identity by row-level security, so a client only ever holds this run's rows.
+ * `goal`, `plan_projection` and `baseline` are shared, and a local dev database
+ * accumulates households across runs — so reading them unscoped picks up
+ * leftovers and asserts against the wrong plan.
+ */
+let scopedHouseholdId: bigint | undefined;
+const mine = {
+  goals: (c: Client) => [...c.conn.db.goal.iter()].filter(g => g.householdId === scopedHouseholdId),
+  projection: (c: Client) =>
+    [...c.conn.db.planProjection.iter()].find(r => r.householdId === scopedHouseholdId),
+};
+
 const checks: Check[] = [];
 
 // ======================================================================
@@ -117,6 +135,7 @@ const myMember = await waitFor('my member row', () =>
 const household = await waitFor('my household', () =>
   [...a.conn.db.household.iter()].find(h => h.id === myMember.householdId)
 );
+scopedHouseholdId = household.id;
 
 checks.push(
   check('F1', 'join code is 6 characters', household.joinCode.length, 6),
@@ -175,7 +194,7 @@ checks.push(
   check('P6', 'B receives only its own transactions', txnsSeenByB.every(t => t.ownerMemberId === memberB.id), true),
   check('P7', 'A cannot see a single transaction of B', txnsSeenByA.filter(t => t.ownerMemberId === memberB.id).length, 0),
   check('P8', 'A receives only its own gap question', rows.gaps(a).every(g => g.ownerMemberId === memberA.id), true),
-  check('P9', 'each partner has exactly one gap question', [rows.gaps(a).length, rows.gaps(b).length], [1, 1]),
+  check('P9', 'each partner has two gap questions (brokerage + liquid savings)', [rows.gaps(a).length, rows.gaps(b).length], [2, 2]),
   // Progress is the deliberate exception: counts, for both members, to anyone
   // in the household.
   check('P10', 'progress view shows both members to A', rows.progress(a).filter(p => p.householdId === household.id).length, 2),
@@ -229,18 +248,24 @@ await waitFor('A items confirmed', () =>
   rows.items(a).every(i => i.status === 'confirmed') ? true : undefined
 );
 
-// Both brokerage transfers are retirement, per the fixture's onboarding answers.
-await a.conn.reducers.answerGap({ questionId: rows.gaps(a)[0]!.id, answer: 'Retirement' });
-await b.conn.reducers.answerGap({ questionId: rows.gaps(b)[0]!.id, answer: 'Retirement' });
+// Both brokerage transfers are retirement, per the fixture's onboarding answers,
+// and both partners hold $5-10K — which sums to the fixture's $15,000.
+const brokerageGap = (c: Client) => rows.gaps(c).find(g => g.subject !== 'liquid-savings')!;
+const liquidGap = (c: Client) => rows.gaps(c).find(g => g.subject === 'liquid-savings')!;
+
+await a.conn.reducers.answerGap({ questionId: brokerageGap(a).id, answer: 'Retirement' });
+await b.conn.reducers.answerGap({ questionId: brokerageGap(b).id, answer: 'Retirement' });
+await a.conn.reducers.answerGap({ questionId: liquidGap(a).id, answer: '$5-10K' });
+await b.conn.reducers.answerGap({ questionId: liquidGap(b).id, answer: '$5-10K' });
 await waitFor('gaps answered', () =>
-  rows.gaps(a)[0]?.answer !== undefined ? true : undefined
+  rows.gaps(a).every(g => g.answer !== undefined) ? true : undefined
 );
 
 checks.push(
-  check('G1', 'answering "Retirement" asks no follow-up', rows.gaps(a).length, 1),
+  check('G1', 'answering "Retirement" asks no follow-up', rows.gaps(a).length, 2),
   check('G2', 'the item stays classified as retirement', rows.items(a).find(i => i.label === 'Harborview Investments')?.kind, 'retirement'),
-  check('G3', 'an answer outside the options is rejected', await rejects(() => a.conn.reducers.answerGap({ questionId: rows.gaps(a)[0]!.id, answer: 'Something else' })), true),
-  check("G4", "a member cannot answer the partner's question", await rejects(() => a.conn.reducers.answerGap({ questionId: rows.gaps(b)[0]!.id, answer: 'Retirement' })), true),
+  check('G3', 'an answer outside the options is rejected', await rejects(() => a.conn.reducers.answerGap({ questionId: brokerageGap(a).id, answer: 'Something else' })), true),
+  check("G4", "a member cannot answer the partner's question", await rejects(() => a.conn.reducers.answerGap({ questionId: brokerageGap(b).id, answer: 'Retirement' })), true),
   check('G5', "a member cannot confirm the partner's item", await rejects(() => a.conn.reducers.confirmItem({ itemId: itemsSeenByB[0]!.id })), true)
 );
 
@@ -273,7 +298,7 @@ checks.push(
   check('B3', 'debt', baseline.debtCents, 50000),
   check('B4', 'flexible', baseline.flexibleCents, 150000),
   check('B5', 'retirement', baseline.retirementCents, 40000),
-  check('B6', 'liquid savings seeded', baseline.liquidSavingsCents, 1500000)
+  check('B6', 'liquid savings from both answered ranges', baseline.liquidSavingsCents, 1500000)
 );
 
 // ======================================================================
@@ -301,7 +326,140 @@ checks.push(
 );
 
 // ======================================================================
-// 8. Reseed keeps the pairing
+// 8. Goals and the projection — Stage 3's Done-when
+// ======================================================================
+// Test Household A's two goals: Japan $5,000 at month 24 (flexible) and the
+// House $40,000 at month 60 (must-have).
+await a.conn.reducers.addGoal({
+  title: 'Japan',
+  icon: 'plane',
+  costTodayCents: 500000,
+  targetMonth: 24,
+  priority: 'flex',
+});
+await b.conn.reducers.addGoal({
+  title: 'House',
+  icon: 'house',
+  costTodayCents: 4000000,
+  targetMonth: 60,
+  priority: 'must',
+});
+
+await waitFor('both goals on A', () => (mine.goals(a).length === 2 ? true : undefined));
+await waitFor('projection with both goals', () => {
+  const row = mine.projection(a);
+  if (!row) return undefined;
+  const parsed = JSON.parse(row.json) as { goals: { id: string }[] };
+  return parsed.goals.length === 2 ? row : undefined;
+});
+
+const projectionRow = mine.projection(a)!;
+const projection = JSON.parse(projectionRow.json) as {
+  goals: { id: string; inflatedCost: number; requiredMonthlyAtStart: number; funded: boolean; settleMonth: number }[];
+  atRiskGoalIds: string[];
+  tightMonths: number[];
+  freeToPlan: number;
+  emergencyMonthsNow: number;
+  goalsOnTrack: { funded: number; total: number };
+  series: { monthly: { month: number; totalSavings: number }[]; yearly: unknown[] };
+  provenance: Record<string, { formula: string; formulaText: string; result: number }>;
+};
+
+const goalRows = mine.goals(a).sort((x, y) => x.targetMonth - y.targetMonth);
+const japanId = String(goalRows[0]!.id);
+const houseId = String(goalRows[1]!.id);
+const pGoal = (id: string) => projection.goals.find(g => g.id === id);
+
+checks.push(
+  // A goal added by B is visible to A: goals are shared, unlike transactions.
+  check('S1', 'both partners see both goals', [mine.goals(a).length, mine.goals(b).length], [2, 2]),
+  check('S2', "a goal added by B reaches A", mine.goals(a).some(g => g.title === 'House'), true),
+  check('S3', 'projection reaches B as well', mine.projection(b) !== undefined, true),
+
+  // E1 / E2 / E3 — the Stage 3 Done-when, now out of a reducer rather than a script.
+  check('S4', 'E1 Japan inflated cost', pGoal(japanId)?.inflatedCost, 5273.65),
+  check('S5', 'E1 House inflated cost', pGoal(houseId)?.inflatedCost, 45699.58),
+  check('S6', 'E2 Japan required monthly', pGoal(japanId)?.requiredMonthlyAtStart, 211.43),
+  check('S7', 'E2 House required monthly', pGoal(houseId)?.requiredMonthlyAtStart, 689.3),
+  check('S8', 'E3 freeToPlan', projection.freeToPlan, 1899.28),
+  check('S9', 'E3 no at-risk goals', projection.atRiskGoalIds, []),
+  check('S10', 'E3 no tight months', projection.tightMonths, []),
+  check('S11', 'E3 emergency-fund months now', projection.emergencyMonthsNow, 4.29),
+  check('S12', 'goals on track', projection.goalsOnTrack, { funded: 2, total: 2 }),
+
+  // The chart's series and the "show the math" source must both be present.
+  check('S13', 'monthly series spans the window', projection.series.monthly.length, 120),
+  check('S14', 'yearly samples present', projection.series.yearly.length, 10),
+  check('S15', 'chart line drops when a goal settles', projection.series.monthly[22]!.totalSavings > projection.series.monthly[23]!.totalSavings, true),
+  check('S16', 'provenance travels with the projection', Object.keys(projection.provenance).length >= 9, true),
+  check('S17', 'every goal number has provenance', [`goals.${japanId}.inflatedCost`, `goals.${japanId}.requiredMonthlyAtStart`].every(k => projection.provenance[k] !== undefined), true),
+  check('S18', 'provenance carries readable formula text', (projection.provenance['freeToPlan']?.formulaText?.length ?? 0) > 20, true),
+  check('S19', 'the projection records who changed it', projectionRow.lastChangedBy !== undefined, true)
+);
+
+// Editing an assumption must recompute for everyone.
+const versionBefore = projectionRow.version;
+await a.conn.reducers.setAssumptions({
+  savingsRateBps: 600,
+  inflationBps: 270,
+  mortgageRateBps: 625,
+  carRateBps: 700,
+});
+await waitFor('projection recomputed after assumption change', () =>
+  (mine.projection(a)?.version ?? 0) > versionBefore ? true : undefined
+);
+const afterRateChange = JSON.parse(mine.projection(a)!.json) as { goals: { id: string; requiredMonthlyAtStart: number }[] };
+
+checks.push(
+  check('S20', 'changing the savings rate bumps the projection version', (mine.projection(a)?.version ?? 0) > versionBefore, true),
+  // A higher savings rate means each goal needs less per month.
+  check('S21', 'a higher savings rate lowers the required monthly', (afterRateChange.goals.find(g => g.id === japanId)?.requiredMonthlyAtStart ?? 0) < 211.43, true),
+  check('S22', 'an absurd assumption is rejected', await rejects(() => a.conn.reducers.setAssumptions({ savingsRateBps: 9000, inflationBps: 270, mortgageRateBps: 625, carRateBps: 700 })), true)
+);
+
+// Put it back, then confirm goal edit and removal both recompute.
+await a.conn.reducers.setAssumptions({ savingsRateBps: 400, inflationBps: 270, mortgageRateBps: 625, carRateBps: 700 });
+await waitFor('rate restored', () => {
+  const parsed = JSON.parse(mine.projection(a)!.json) as { goals: { id: string; requiredMonthlyAtStart: number }[] };
+  return parsed.goals.find(g => g.id === japanId)?.requiredMonthlyAtStart === 211.43 ? true : undefined;
+});
+
+await a.conn.reducers.editGoal({
+  goalId: goalRows[0]!.id,
+  title: 'Japan trip',
+  costTodayCents: 600000,
+  targetMonth: 24,
+  priority: 'flex',
+});
+await waitFor('edited goal recomputed', () => {
+  const parsed = JSON.parse(mine.projection(a)!.json) as { goals: { id: string; inflatedCost: number }[] };
+  return (parsed.goals.find(g => g.id === japanId)?.inflatedCost ?? 0) > 6000 ? true : undefined;
+});
+
+// Wait on **B** before asserting B: waiting only for A's projection proves
+// nothing about whether the partner's device converged.
+await waitFor("B to see the retitled goal", () =>
+  mine.goals(b).find(g => String(g.id) === japanId)?.title === 'Japan trip' ? true : undefined
+);
+
+checks.push(
+  check('S23', 'editing a goal retitles it for both partners', mine.goals(b).find(g => String(g.id) === japanId)?.title, 'Japan trip'),
+  check('S24', 'editing a goal recomputes its inflated cost', JSON.parse(mine.projection(a)!.json).goals.find((g: { id: string }) => g.id === japanId).inflatedCost, 6328.37),
+  check('S25', 'a goal with a zero cost is rejected', await rejects(() => a.conn.reducers.addGoal({ title: 'Nope', icon: 'star', costTodayCents: 0, targetMonth: 12, priority: 'flex' })), true),
+  check('S26', 'a target month past the window is rejected', await rejects(() => a.conn.reducers.addGoal({ title: 'Nope', icon: 'star', costTodayCents: 100000, targetMonth: 121, priority: 'flex' })), true)
+);
+
+await a.conn.reducers.removeGoal({ goalId: goalRows[0]!.id });
+await waitFor('goal removed on A', () => (mine.goals(a).length === 1 ? true : undefined));
+await waitFor('goal removal reaches B', () => (mine.goals(b).length === 1 ? true : undefined));
+
+checks.push(
+  check('S27', 'removing a goal removes it for both', [mine.goals(a).length, mine.goals(b).length], [1, 1]),
+  check('S28', 'the projection drops the removed goal', JSON.parse(mine.projection(a)!.json).goals.length, 1)
+);
+
+// ======================================================================
+// 9. Reseed keeps the pairing
 // ======================================================================
 await a.conn.reducers.finishOnboarding();
 await waitFor('onboarded', () =>
@@ -318,7 +476,8 @@ checks.push(
   check('R4', 'reseed keeps both members paired', rows.members(a).filter(m => m.householdId === household.id).length, 2),
   check('R5', 'reseed keeps the join code', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.joinCode, household.joinCode),
   check('R6', 'reseed keeps the transactions, so inference can re-run', rows.transactions(a).length > 0, true),
-  check('R7', 'reseed returns the household to un-onboarded', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.onboarded, false)
+  check('R7', 'reseed returns the household to un-onboarded', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.onboarded, false),
+  check('R8', 'reseed clears goals', mine.goals(a).length, 0)
 );
 
 /** True when a reducer call is rejected, which is what we want to assert. */

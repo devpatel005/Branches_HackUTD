@@ -159,6 +159,53 @@ export const funMoney = table(
 );
 
 /**
+ * A goal is **shared**: both partners see every goal, unlike transactions and
+ * inferred items. There is no visibility filter here on purpose — the plan is
+ * the thing they build together (01 Product Overview).
+ */
+export const goal = table(
+  { name: 'goal', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    householdId: t.u64().index('btree'),
+    title: t.string(),
+    icon: t.string(),
+    costTodayCents: t.i32(),
+    /** Plan-month index T, 1..120. The goal settles at the end of month T-1. */
+    targetMonth: t.i32(),
+    /** `must` or `flex`. Must-have goals are funded first. */
+    priority: t.string(),
+    createdBy: t.u64(),
+    /** `active` or `completed`. */
+    status: t.string(),
+  }
+);
+
+/**
+ * The engine's output for the committed plan (05 Data Model).
+ *
+ * Stored as one JSON string rather than split across columns: the whole
+ * `SimulationOutput` for Test Household A is ~13.6 KB including the 120-month
+ * series and all provenance, which is small enough that splitting it would buy
+ * nothing and cost the UI a join. Recomputed on **every** plan change, so
+ * clients never see a projection that disagrees with the goals it came from.
+ *
+ * `version` increments on each write, which gives the UI something cheap to
+ * watch and makes a stale read obvious.
+ */
+export const planProjection = table(
+  { name: 'plan_projection', public: true },
+  {
+    householdId: t.u64().primaryKey(),
+    version: t.i32(),
+    json: t.string(),
+    updatedAt: t.timestamp(),
+    /** Who triggered the recompute, so the UI can pulse in their colour. */
+    lastChangedBy: t.option(t.u64()),
+  }
+);
+
+/**
  * Stage 0's sync canary, kept deliberately.
  *
  * `verify:stdb` uses it as a stale-publish detector: the reducer recomputes
@@ -185,6 +232,8 @@ const spacetimedb = schema({
   gapQuestion,
   baseline,
   funMoney,
+  goal,
+  planProjection,
   counter,
 });
 

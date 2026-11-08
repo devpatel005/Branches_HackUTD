@@ -15,6 +15,7 @@ export default function OnboardingLayout() {
       <Stack.Screen name="confirm" options={{ title: '' }} />
       <Stack.Screen name="gaps" options={{ title: '' }} />
       <Stack.Screen name="fun-money" options={{ title: '' }} />
+      <Stack.Screen name="goals" options={{ title: '' }} />
     </Stack>
   );
 }

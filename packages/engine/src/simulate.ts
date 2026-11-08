@@ -186,14 +186,21 @@ export function simulate(input: SimulationInput): SimulationOutput {
     if (emergency < floor - EPSILON || underfunded) tightMonths.push(m);
 
     const goalBalances: Record<string, number> = {};
+    let unsettledBalances = 0;
     for (const goal of goals) {
-      if (!goal.settled) goalBalances[goal.id] = toCents(goal.balance);
+      if (!goal.settled) {
+        goalBalances[goal.id] = toCents(goal.balance);
+        unsettledBalances += goal.balance;
+      }
     }
     monthly.push({
       month: m,
       emergency: toCents(emergency),
       goalBalances,
       surplus: toCents(surplus),
+      // Summed unrounded, then rounded once, so the chart's line never
+      // disagrees with the parts by a cent.
+      totalSavings: toCents(emergency + unsettledBalances),
     });
   }
 

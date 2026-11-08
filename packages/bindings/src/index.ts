@@ -34,19 +34,23 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AddGoalReducer from "./add_goal_reducer.ts";
 import AnswerGapReducer from "./answer_gap_reducer.ts";
 import ConfirmAllMyItemsReducer from "./confirm_all_my_items_reducer.ts";
 import ConfirmItemReducer from "./confirm_item_reducer.ts";
 import CreateHouseholdReducer from "./create_household_reducer.ts";
+import EditGoalReducer from "./edit_goal_reducer.ts";
 import EditItemReducer from "./edit_item_reducer.ts";
 import FinishOnboardingReducer from "./finish_onboarding_reducer.ts";
 import IncrementReducer from "./increment_reducer.ts";
 import JoinHouseholdReducer from "./join_household_reducer.ts";
 import RejectItemReducer from "./reject_item_reducer.ts";
+import RemoveGoalReducer from "./remove_goal_reducer.ts";
 import ReseedHouseholdReducer from "./reseed_household_reducer.ts";
 import ResetReducer from "./reset_reducer.ts";
 import RunInferenceReducer from "./run_inference_reducer.ts";
 import SeedMockDataReducer from "./seed_mock_data_reducer.ts";
+import SetAssumptionsReducer from "./set_assumptions_reducer.ts";
 import SetDisplayNameReducer from "./set_display_name_reducer.ts";
 import SetFunMoneyReducer from "./set_fun_money_reducer.ts";
 import SetFunMoneyStatusReducer from "./set_fun_money_status_reducer.ts";
@@ -59,10 +63,12 @@ import BaselineRow from "./baseline_table.ts";
 import CounterRow from "./counter_table.ts";
 import FunMoneyRow from "./fun_money_table.ts";
 import GapQuestionRow from "./gap_question_table.ts";
+import GoalRow from "./goal_table.ts";
 import HouseholdRow from "./household_table.ts";
 import InferredItemRow from "./inferred_item_table.ts";
 import MemberRow from "./member_table.ts";
 import OnboardingProgressRow from "./onboarding_progress_table.ts";
+import PlanProjectionRow from "./plan_projection_table.ts";
 import TransactionRow from "./transaction_table.ts";
 
 /** Type-only namespace exports for generated type groups. */
@@ -133,6 +139,20 @@ const tablesSchema = __schema({
       { name: 'gap_question_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, GapQuestionRow),
+  goal: __table({
+    name: 'goal',
+    indexes: [
+      { accessor: 'householdId', name: 'goal_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'goal_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'goal_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, GoalRow),
   household: __table({
     name: 'household',
     indexes: [
@@ -183,6 +203,17 @@ const tablesSchema = __schema({
       { name: 'member_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, MemberRow),
+  planProjection: __table({
+    name: 'plan_projection',
+    indexes: [
+      { accessor: 'householdId', name: 'plan_projection_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+    ],
+    constraints: [
+      { name: 'plan_projection_household_id_key', constraint: 'unique', columns: ['householdId'] },
+    ],
+  }, PlanProjectionRow),
   transaction: __table({
     name: 'transaction',
     indexes: [
@@ -211,19 +242,23 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("add_goal", AddGoalReducer),
   __reducerSchema("answer_gap", AnswerGapReducer),
   __reducerSchema("confirm_all_my_items", ConfirmAllMyItemsReducer),
   __reducerSchema("confirm_item", ConfirmItemReducer),
   __reducerSchema("create_household", CreateHouseholdReducer),
+  __reducerSchema("edit_goal", EditGoalReducer),
   __reducerSchema("edit_item", EditItemReducer),
   __reducerSchema("finish_onboarding", FinishOnboardingReducer),
   __reducerSchema("increment", IncrementReducer),
   __reducerSchema("join_household", JoinHouseholdReducer),
   __reducerSchema("reject_item", RejectItemReducer),
+  __reducerSchema("remove_goal", RemoveGoalReducer),
   __reducerSchema("reseed_household", ReseedHouseholdReducer),
   __reducerSchema("reset", ResetReducer),
   __reducerSchema("run_inference", RunInferenceReducer),
   __reducerSchema("seed_mock_data", SeedMockDataReducer),
+  __reducerSchema("set_assumptions", SetAssumptionsReducer),
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("set_fun_money", SetFunMoneyReducer),
   __reducerSchema("set_fun_money_status", SetFunMoneyStatusReducer),

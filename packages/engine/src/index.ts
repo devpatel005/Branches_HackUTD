@@ -45,6 +45,10 @@ export {
   FLEXIBLE_LABEL,
   BROKERAGE_CHOICES,
   BALANCE_RANGES,
+  LIQUID_SAVINGS_RANGES,
+  liquidSavingsFromRange,
+  liquidSavingsGapQuestion,
+  isLiquidSavingsQuestion,
 } from './inference.ts';
 
 export { simulate } from './simulate.ts';
