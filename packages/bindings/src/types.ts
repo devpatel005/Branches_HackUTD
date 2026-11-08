@@ -32,6 +32,30 @@ export const Baseline = __t.object("Baseline", {
 });
 export type Baseline = __Infer<typeof Baseline>;
 
+export const Branch = __t.object("Branch", {
+  id: __t.u64(),
+  sessionId: __t.u64(),
+  candidateId: __t.u64(),
+  name: __t.string(),
+  summary: __t.string(),
+  nameSource: __t.string(),
+  position: __t.i32(),
+});
+export type Branch = __Infer<typeof Branch>;
+
+export const BranchCandidate = __t.object("BranchCandidate", {
+  id: __t.u64(),
+  sessionId: __t.u64(),
+  eventId: __t.u64(),
+  batch: __t.i32(),
+  signature: __t.string(),
+  levers: __t.string(),
+  stats: __t.string(),
+  source: __t.string(),
+  shownAt: __t.option(__t.timestamp()),
+});
+export type BranchCandidate = __Infer<typeof BranchCandidate>;
+
 export const ChatMessage = __t.object("ChatMessage", {
   id: __t.u64(),
   householdId: __t.u64(),
@@ -45,6 +69,16 @@ export const ChatMessage = __t.object("ChatMessage", {
   createdAt: __t.timestamp(),
 });
 export type ChatMessage = __Infer<typeof ChatMessage>;
+
+export const Constraint = __t.object("Constraint", {
+  id: __t.u64(),
+  sessionId: __t.u64(),
+  memberId: __t.u64(),
+  kind: __t.string(),
+  target: __t.string(),
+  active: __t.bool(),
+});
+export type Constraint = __Infer<typeof Constraint>;
 
 export const Counter = __t.object("Counter", {
   id: __t.u32(),
@@ -85,6 +119,8 @@ export const Goal = __t.object("Goal", {
   icon: __t.string(),
   costTodayCents: __t.i32(),
   targetMonth: __t.i32(),
+  originalTargetMonth: __t.i32(),
+  committedShrinkPct: __t.i32(),
   priority: __t.string(),
   createdBy: __t.u64(),
   status: __t.string(),
@@ -174,6 +210,14 @@ export const ParamEntry = __t.object("ParamEntry", {
 });
 export type ParamEntry = __Infer<typeof ParamEntry>;
 
+export const PlanCommitment = __t.object("PlanCommitment", {
+  householdId: __t.u64(),
+  saveMoreCents: __t.i32(),
+  fromBranchId: __t.option(__t.u64()),
+  committedAt: __t.timestamp(),
+});
+export type PlanCommitment = __Infer<typeof PlanCommitment>;
+
 export const PlanProjection = __t.object("PlanProjection", {
   householdId: __t.u64(),
   version: __t.i32(),
@@ -182,6 +226,17 @@ export const PlanProjection = __t.object("PlanProjection", {
   lastChangedBy: __t.option(__t.u64()),
 });
 export type PlanProjection = __Infer<typeof PlanProjection>;
+
+export const Session = __t.object("Session", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  eventId: __t.u64(),
+  status: __t.string(),
+  startedBy: __t.u64(),
+  committedBranchId: __t.option(__t.u64()),
+  startedAt: __t.timestamp(),
+});
+export type Session = __Infer<typeof Session>;
 
 export const Transaction = __t.object("Transaction", {
   id: __t.u64(),

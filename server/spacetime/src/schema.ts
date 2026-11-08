@@ -173,6 +173,17 @@ export const goal = table(
     costTodayCents: t.i32(),
     /** Plan-month index T, 1..120. The goal settles at the end of month T-1. */
     targetMonth: t.i32(),
+    /**
+     * Where this goal was first aimed, before any committed branch moved it.
+     *
+     * Kept so Timeline and Goal Detail can say "moved from Jun 2028 to Mar
+     * 2029" — the couple should be able to see what a decision cost them — and
+     * so a later event's branches measure delays from the real original rather
+     * than from an already-delayed date.
+     */
+    originalTargetMonth: t.i32(),
+    /** Percent of today's cost removed by a committed shrink lever. */
+    committedShrinkPct: t.i32(),
     /** `must` or `flex`. Must-have goals are funded first. */
     priority: t.string(),
     createdBy: t.u64(),
@@ -269,6 +280,104 @@ export const chatMessage = table(
 );
 
 /**
+ * A planning session — one event, one conversation.
+ *
+ * Pulled forward from Stage 7 so candidates, constraints and reroll exclusions
+ * have a real session to hang off, and so Stage 7 adds presence, selections and
+ * the ready check to an existing screen rather than building one. Only one
+ * session may be open per household (08 Live Session Spec).
+ */
+export const session = table(
+  { name: 'session', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    householdId: t.u64().index('btree'),
+    eventId: t.u64().index('btree'),
+    /** `open` | `committed` | `closed`. */
+    status: t.string(),
+    startedBy: t.u64(),
+    committedBranchId: t.option(t.u64()),
+    startedAt: t.timestamp(),
+  }
+);
+
+/**
+ * A path the engine generated but the couple may not have seen yet.
+ *
+ * `signature` is the canonical lever-set string: it is how a reroll avoids
+ * repeating a path and how a candidate keeps its identity across batches.
+ */
+export const branchCandidate = table(
+  { name: 'branch_candidate', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    sessionId: t.u64().index('btree'),
+    eventId: t.u64(),
+    /** Which generation round produced it; a reroll increments this. */
+    batch: t.i32(),
+    signature: t.string(),
+    levers: t.string(),
+    stats: t.string(),
+    /** `engine` | `bridge` | `custom`. */
+    source: t.string(),
+    /** Set once the candidate has been offered, so a reroll can exclude it. */
+    shownAt: t.option(t.timestamp()),
+  }
+);
+
+/** One of the three named paths actually on screen. */
+export const branch = table(
+  { name: 'branch', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    sessionId: t.u64().index('btree'),
+    candidateId: t.u64(),
+    name: t.string(),
+    summary: t.string(),
+    /** `agent` | `template`. Stage 5 only ever writes `template`. */
+    nameSource: t.string(),
+    position: t.i32(),
+  }
+);
+
+/**
+ * A lock (keep this effect when rerolling) or a pin (a member's single
+ * non-negotiable). Same shapes, different purpose (08 Live Session Spec).
+ */
+export const constraint = table(
+  { name: 'constraint', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    sessionId: t.u64().index('btree'),
+    memberId: t.u64(),
+    /** `lock` or `pin`. */
+    kind: t.string(),
+    /** The constraint shape, as JSON: goalOnTime / goalFullSize / etc. */
+    target: t.string(),
+    active: t.bool(),
+  }
+);
+
+/**
+ * What the couple decided, kept separate from what was observed.
+ *
+ * The baseline means "what your transactions show"; this means "what we chose
+ * to change". Keeping `saveMore` here rather than editing the baseline's
+ * flexible figure means the decision stays visible and reversible, and
+ * re-running inference cannot silently undo it.
+ */
+export const planCommitment = table(
+  { name: 'plan_commitment', public: true },
+  {
+    householdId: t.u64().primaryKey(),
+    saveMoreCents: t.i32(),
+    /** The branch this came from, for provenance. */
+    fromBranchId: t.option(t.u64()),
+    committedAt: t.timestamp(),
+  }
+);
+
+/**
  * Stage 0's sync canary, kept deliberately.
  *
  * `verify:stdb` uses it as a stale-publish detector: the reducer recomputes
@@ -300,6 +409,11 @@ const spacetimedb = schema({
   lifeEvent,
   impact,
   chatMessage,
+  session,
+  branchCandidate,
+  branch,
+  constraint,
+  planCommitment,
   counter,
 });
 

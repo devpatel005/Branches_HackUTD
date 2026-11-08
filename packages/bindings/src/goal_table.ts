@@ -17,6 +17,8 @@ export default __t.row({
   icon: __t.string(),
   costTodayCents: __t.i32().name("cost_today_cents"),
   targetMonth: __t.i32().name("target_month"),
+  originalTargetMonth: __t.i32().name("original_target_month"),
+  committedShrinkPct: __t.i32().name("committed_shrink_pct"),
   priority: __t.string(),
   createdBy: __t.u64().name("created_by"),
   status: __t.string(),

@@ -1,9 +1,12 @@
 /**
  * V2 Engine — 12 Verification#V2 Engine.
  *
- * Scenarios E1-E5 and E10 from 06 Engine Spec#Golden scenarios, against
- * Test Household A. E6-E9 depend on candidate generation and ordering, which
- * are Stage 5 (OPEN(OD-3)), so they report as PENDING here.
+ * All of E1-E10 from 06 Engine Spec#Golden scenarios, against Test Household A,
+ * plus the constraint, reroll and bridge behaviour from 08 Live Session Spec.
+ *
+ * The candidate rules E6-E9 exercise are v1 and expected to change
+ * (OPEN(OD-3)); generation, ordering and naming are separate functions so they
+ * can be swapped without touching these checks.
  *
  * Also enforces the Stage 1 Done-when item that **every number in the output
  * has a provenance record**, by walking the output rather than by listing
@@ -15,14 +18,24 @@ import {
   TEST_HOUSEHOLD_A,
   TEST_HOUSEHOLD_A_SURPLUS,
   checkAffordability,
+  closestOption,
   computeImpact,
+  generateBridges,
+  generateCandidates,
+  leverSetSignature,
+  minimalLevers,
   simulate,
+  templateName,
+  type Constraint,
   type SimulationOutput,
 } from '@branches/engine';
 import { check, printTable, type Check } from './table.ts';
 
 const checks: Check[] = [];
 const goal = (out: SimulationOutput, id: string) => out.goals.find(g => g.id === id);
+
+/** The fixture's goals, for name templating. Titles are ids at engine level. */
+const TEST_HOUSEHOLD_A_GOALS_FOR_NAMES = TEST_HOUSEHOLD_A.goals;
 /** Compact "9-23" form for a contiguous run of months, so tables stay readable. */
 const span = (months: number[]) =>
   months.length === 0
@@ -248,15 +261,134 @@ checks.push(
   )
 );
 
-const ok = printTable('V2 Engine (E1-E5, E10)', checks);
+// ======================================================================
+// E6 - minimal levers for E5
+// ======================================================================
+const e5Input = { ...TEST_HOUSEHOLD_A, events: [E5_BABY_EVENT] };
+const minimal = minimalLevers(e5Input);
 
-console.log('PENDING (Stage 5 — candidate generation and ordering, OPEN(OD-3)):');
-console.log('  E6  minimal levers for E5');
-console.log('  E7  balanced pair for E5');
-console.log('  E8  candidate order for E5');
-console.log('  E9  E5 with each candidate applied');
-console.log('  The minimal-lever search they build on is already in');
-console.log('  packages/engine/src/levers.ts and exercised by the affordability check.\n');
+checks.push(
+  check('E6a', 'minimal delay(japan) does not exist', minimal.delays.japan, null),
+  check('E6b', 'minimal shrink(japan) does not exist', minimal.shrinks.japan, null),
+  check('E6c', 'minimal delay(house) is 18 months', minimal.delays.house, 18),
+  check('E6d', 'minimal saveMore is $175', minimal.saveMore, 175)
+);
+
+// ======================================================================
+// E7 - the balanced pair
+// ======================================================================
+const balanced = simulate({
+  ...e5Input,
+  levers: { delays: { house: 9 }, saveMore: 75 },
+});
+
+checks.push(
+  check('E7a', 'delay(house, 9) + saveMore(75) fixes the plan', balanced.atRiskGoalIds, []),
+  check(
+    'E7b',
+    'and it is generated as a candidate',
+    generateCandidates(e5Input).some(c => c.signature === 'd:house=9|m:75'),
+    true
+  )
+);
+
+// ======================================================================
+// E8 - candidate order and fallback names
+// ======================================================================
+const candidates = generateCandidates(e5Input);
+// The engine holds no calendar, so the caller supplies month labels. The
+// goldens only care about the order, so a stub label is enough here.
+const monthLabel = (planMonth: number) => `M${planMonth}`;
+
+checks.push(
+  check('E8a', 'candidates appear in the documented order', candidates.slice(0, 3).map(c => c.signature), [
+    'm:175',
+    'd:house=9|m:75',
+    'd:house=18',
+  ]),
+  check(
+    'E8b',
+    'fallback names match the templates',
+    candidates.slice(0, 3).map(c => templateName(c.levers, TEST_HOUSEHOLD_A_GOALS_FOR_NAMES, monthLabel)),
+    ['Save $175 more a month', 'Balanced', 'Move house to M78']
+  ),
+  check('E8c', 'at most 8 candidates are kept', candidates.length <= 8, true),
+  check('E8d', 'no candidate repeats a lever set', new Set(candidates.map(c => c.signature)).size, candidates.length)
+);
+
+// ======================================================================
+// E9 - each candidate applied
+// ======================================================================
+for (const [index, candidate] of candidates.slice(0, 3).entries()) {
+  const applied = simulate({ ...e5Input, levers: candidate.levers });
+  checks.push(
+    check(`E9a.${index + 1}`, `candidate ${index + 1} (${candidate.signature}) leaves nothing at risk`, applied.atRiskGoalIds, []),
+    check(`E9b.${index + 1}`, `candidate ${index + 1} tight months are [9, 10]`, applied.tightMonths, [9, 10])
+  );
+}
+
+// ======================================================================
+// Constraints, rerolls and bridges (08 Live Session Spec)
+// ======================================================================
+const houseOnTime: Constraint = { kind: 'goalOnTime', goalId: 'house' };
+const lockedCandidates = generateCandidates(e5Input, { constraints: [houseOnTime] });
+
+checks.push(
+  check(
+    'C1',
+    'locking "House on time" never delays the house',
+    lockedCandidates.every(c => (c.levers.delays?.house ?? 0) === 0),
+    true
+  ),
+  check('C2', 'and candidates still exist under that lock', lockedCandidates.length > 0, true),
+  check(
+    'C3',
+    'a reroll never repeats an already-shown lever set',
+    generateCandidates(e5Input, { exclude: candidates.map(c => c.signature) }).some(c =>
+      candidates.some(shown => shown.signature === c.signature)
+    ),
+    false
+  ),
+  check(
+    'C4',
+    'noExtraSaving removes every saveMore candidate',
+    generateCandidates(e5Input, { constraints: [{ kind: 'noExtraSaving' }] }).every(
+      c => (c.levers.saveMore ?? 0) === 0
+    ),
+    true
+  ),
+  check(
+    'C5',
+    'saveMoreAtMost caps what is offered',
+    generateCandidates(e5Input, { constraints: [{ kind: 'saveMoreAtMost', amount: 100 }] }).every(
+      c => (c.levers.saveMore ?? 0) <= 100
+    ),
+    true
+  ),
+  check('C6', 'signatures are canonical and order-independent', leverSetSignature({ saveMore: 75, delays: { house: 9 } }), 'd:house=9|m:75')
+);
+
+// Two conflicting pins: Japan must not move, and no extra saving. Nothing in
+// the normal domains can satisfy both, so the closest-option statements answer.
+const conflicting: Constraint[] = [
+  { kind: 'goalOnTime', goalId: 'japan' },
+  { kind: 'noExtraSaving' },
+];
+const bridges = generateBridges(e5Input, conflicting);
+const closest = closestOption(e5Input, conflicting);
+
+checks.push(
+  check('B1', 'bridges honour every pin', bridges.every(c => (c.levers.saveMore ?? 0) === 0 && (c.levers.delays?.japan ?? 0) === 0), true),
+  check(
+    'B2',
+    'when no bridge exists, the closest option says what it would take',
+    bridges.length === 0 ? closest.saveMore !== null || Object.values(closest.delayByGoalId).some(v => v !== null) : true,
+    true
+  ),
+  check('B3', 'the closest option is deterministic', JSON.stringify(closestOption(e5Input, conflicting)), JSON.stringify(closest))
+);
+
+const ok = printTable('V2 Engine (E1-E10)', checks);
 
 // Keep the compact span helper referenced so the import surface stays honest.
 void span;

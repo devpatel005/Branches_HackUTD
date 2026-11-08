@@ -7,12 +7,23 @@ import {
   followUpForGapAnswer,
   computeImpact as computeImpactWithEngine,
   checkAffordability as checkAffordabilityWithEngine,
+  closestOption as closestOptionWithEngine,
+  generateBridges as generateBridgesWithEngine,
+  generateCandidates as generateCandidatesWithEngine,
+  leverSetSignature,
+  statsFor,
+  templateName,
+  templateSummary,
+  delayDomain,
+  shrinkDomain,
+  saveMoreCap,
+  SAVE_MORE_STEP,
+  simulate as simulateWithEngine,
   EVENT_TEMPLATES,
   inferBaseline,
   isLiquidSavingsQuestion,
   liquidSavingsFromRange,
   liquidSavingsGapQuestion,
-  simulate,
   toIntegerCents,
   type Assumptions,
   type Baseline,
@@ -20,6 +31,9 @@ import {
   type GapQuestion,
   type Goal,
   type InferredItem,
+  type Candidate,
+  type Constraint,
+  type Levers,
   type LifeEvent,
   type LifeEventTemplateId,
   type SimulationInput,
@@ -281,50 +295,15 @@ function assumptionsFor(ctx: Ctx, householdId: bigint): Assumptions {
  * engine's dollars and rates, and storing what comes back.
  */
 function recomputeProjection(ctx: Ctx, householdId: bigint, changedBy?: bigint): void {
-  const baselineRow = ctx.db.baseline.householdId.find(householdId);
-  if (!baselineRow) return;
+  // Built by the single `simulationInputFor`, so the committed plan, an impact
+  // and a branch candidate can never disagree about the household they
+  // describe. Duplicating this was a real risk: Stage 5's committed saveMore
+  // would have applied to candidates but not to the plan they were measured
+  // against.
+  const input = simulationInputFor(ctx, householdId);
+  if (!input) return;
 
-  const members = [...ctx.db.member.householdId.filter(householdId)].filter(
-    m => m.role === 'member'
-  );
-
-  const incomeByMember: Record<string, number> = {};
-  for (const entry of baselineRow.incomeByMember) {
-    incomeByMember[String(entry.memberId)] = entry.cents / 100;
-  }
-  // A member with no confirmed income still has to exist in the map, or the
-  // simulation silently drops their fun money and income override slots.
-  for (const m of members) {
-    if (incomeByMember[String(m.id)] === undefined) incomeByMember[String(m.id)] = 0;
-  }
-
-  const funMoneyByMember: Record<string, number> = {};
-  for (const m of members) {
-    const fun = ctx.db.funMoney.memberId.find(m.id);
-    funMoneyByMember[String(m.id)] = fun ? fun.monthlyCents / 100 : 0;
-  }
-
-  const baseline: Baseline = {
-    incomeByMember,
-    fixed: baselineRow.fixedCents / 100,
-    debt: baselineRow.debtCents / 100,
-    flexible: baselineRow.flexibleCents / 100,
-    funMoneyByMember,
-    retirement: baselineRow.retirementCents / 100,
-    liquidSavings: baselineRow.liquidSavingsCents / 100,
-  };
-
-  const goals: Goal[] = [...ctx.db.goal.householdId.filter(householdId)]
-    .filter(g => g.status === 'active')
-    .sort((a, b) => (a.id < b.id ? -1 : 1))
-    .map(g => ({
-      id: String(g.id),
-      costToday: g.costTodayCents / 100,
-      targetMonth: g.targetMonth,
-      priority: g.priority === 'must' ? 'must' : 'flex',
-    }));
-
-  const output = simulate({ baseline, goals, assumptions: assumptionsFor(ctx, householdId) });
+  const output = simulateWithEngine(input);
 
   const existing = ctx.db.planProjection.householdId.find(householdId);
   const row = {
@@ -775,6 +754,20 @@ export const reseedHousehold = spacetimedb.reducer(ctx => {
   for (const row of [...ctx.db.chatMessage.householdId.filter(householdId)]) {
     ctx.db.chatMessage.id.delete(row.id);
   }
+  for (const sessionRow of [...ctx.db.session.householdId.filter(householdId)]) {
+    for (const row of [...ctx.db.branch.sessionId.filter(sessionRow.id)]) {
+      ctx.db.branch.id.delete(row.id);
+    }
+    for (const row of [...ctx.db.branchCandidate.sessionId.filter(sessionRow.id)]) {
+      ctx.db.branchCandidate.id.delete(row.id);
+    }
+    for (const row of [...ctx.db.constraint.sessionId.filter(sessionRow.id)]) {
+      ctx.db.constraint.id.delete(row.id);
+    }
+    ctx.db.session.id.delete(sessionRow.id);
+  }
+  const commitment = ctx.db.planCommitment.householdId.find(householdId);
+  if (commitment) ctx.db.planCommitment.householdId.delete(householdId);
   const projection = ctx.db.planProjection.householdId.find(householdId);
   if (projection) ctx.db.planProjection.householdId.delete(householdId);
 
@@ -798,6 +791,9 @@ const ParamEntry = t.object('ParamEntry', { key: t.string(), value: t.string() }
 function simulationInputFor(ctx: Ctx, householdId: bigint): SimulationInput | null {
   const baselineRow = ctx.db.baseline.householdId.find(householdId);
   if (!baselineRow) return null;
+  // Committed decisions ride on every simulation, so a projection, an impact
+  // and a candidate all measure against the same plan.
+  const commitment = ctx.db.planCommitment.householdId.find(householdId);
 
   const members = [...ctx.db.member.householdId.filter(householdId)].filter(
     m => m.role === 'member'
@@ -819,7 +815,10 @@ function simulationInputFor(ctx: Ctx, householdId: bigint): SimulationInput | nu
     .sort((a, b) => (a.id < b.id ? -1 : 1))
     .map(g => ({
       id: String(g.id),
-      costToday: g.costTodayCents / 100,
+      // A committed shrink is folded into the effective cost rather than passed
+      // as a lever, so a *new* shrink lever applies on top of it instead of
+      // replacing it. The stored cost stays the original, for the record.
+      costToday: (g.costTodayCents / 100) * (1 - g.committedShrinkPct / 100),
       targetMonth: g.targetMonth,
       priority: g.priority === 'must' ? 'must' : 'flex',
     }));
@@ -836,6 +835,7 @@ function simulationInputFor(ctx: Ctx, householdId: bigint): SimulationInput | nu
     },
     goals,
     assumptions: assumptionsFor(ctx, householdId),
+    levers: commitment ? { saveMore: commitment.saveMoreCents / 100 } : undefined,
   };
 }
 
@@ -1198,6 +1198,8 @@ export const addGoal = spacetimedb.reducer(
       icon,
       costTodayCents,
       targetMonth,
+      originalTargetMonth: targetMonth,
+      committedShrinkPct: 0,
       priority,
       createdBy: caller.id,
       status: 'active',
@@ -1228,6 +1230,9 @@ export const editGoal = spacetimedb.reducer(
       title: title.trim(),
       costTodayCents,
       targetMonth,
+      // A deliberate edit re-aims the goal, so the original moves with it. Only
+      // a committed branch leaves the original behind to show the move.
+      originalTargetMonth: targetMonth,
       priority,
     });
     recomputeProjection(ctx, caller.householdId, caller.id);
@@ -1285,6 +1290,456 @@ export const setAssumptions = spacetimedb.reducer(
     recomputeProjection(ctx, caller.householdId, caller.id);
   }
 );
+
+// ---------------------------------------------------------------------------
+// Branches (Stage 5)
+// ---------------------------------------------------------------------------
+
+/** How many named branches the couple sees at once (06 Engine Spec). */
+const BRANCHES_SHOWN = 3;
+
+function openSessionFor(ctx: Ctx, householdId: bigint) {
+  return [...ctx.db.session.householdId.filter(householdId)].find(x => x.status === 'open');
+}
+
+function sessionOrReject(ctx: Ctx, sessionId: bigint, householdId: bigint) {
+  const found = ctx.db.session.id.find(sessionId);
+  if (!found || found.householdId !== householdId) throw new SenderError('session not found');
+  return found;
+}
+
+/** Active constraints of a session, in the engine's shape. */
+function constraintsFor(ctx: Ctx, sessionId: bigint, kind?: 'lock' | 'pin'): Constraint[] {
+  return [...ctx.db.constraint.sessionId.filter(sessionId)]
+    .filter(c => c.active && (kind === undefined || c.kind === kind))
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .map(c => JSON.parse(c.target) as Constraint);
+}
+
+/**
+ * The simulation input for a session: the household's plan, plus the event the
+ * session is about, plus anything already committed.
+ */
+function sessionInput(ctx: Ctx, householdId: bigint, eventId: bigint): SimulationInput {
+  const base = simulationInputFor(ctx, householdId);
+  if (!base) throw new SenderError('finish onboarding first');
+  if (base.goals.length === 0) throw new SenderError('add a goal first');
+
+  const event = ctx.db.lifeEvent.id.find(eventId);
+  if (!event) throw new SenderError('event not found');
+
+  return {
+    ...base,
+    events: [
+      {
+        templateId: event.templateId as LifeEventTemplateId,
+        params: JSON.parse(event.params) as Record<string, unknown>,
+      },
+    ],
+  };
+}
+
+/** Plan-month index to a short calendar label, for the fallback branch names. */
+function monthLabelFor(ctx: Ctx, householdId: bigint): (planMonth: number) => string {
+  const household = ctx.db.household.id.find(householdId);
+  const current = household?.currentMonth ?? '2026-01';
+  const [yearStr, monthStr] = current.split('-');
+  const baseIndex = Number(yearStr) * 12 + (Number(monthStr) - 1);
+  const names = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return planMonth => {
+    const index = baseIndex + planMonth;
+    return `${names[((index % 12) + 12) % 12]} ${Math.floor(index / 12)}`;
+  };
+}
+
+/**
+ * Write candidates, then name and show the first three.
+ *
+ * Stage 5 uses the engine's **template names**; Stage 6 replaces the naming
+ * step with the agent and keeps this as the fallback
+ * (07 Agent Spec#Deterministic fallbacks).
+ */
+function writeCandidatesAndBranches(
+  ctx: Ctx,
+  sessionRow: { id: bigint; householdId: bigint; eventId: bigint },
+  candidates: readonly Candidate[],
+  batch: number
+): void {
+  const input = sessionInput(ctx, sessionRow.householdId, sessionRow.eventId);
+  const label = monthLabelFor(ctx, sessionRow.householdId);
+  const goalTitles = new Map(
+    [...ctx.db.goal.householdId.filter(sessionRow.householdId)].map(g => [String(g.id), g.title])
+  );
+  const titleOf = (goalId: string) => goalTitles.get(goalId) ?? goalId;
+
+  // Replace the shown branches; candidates accumulate so a reroll can exclude
+  // what has already been offered.
+  for (const row of [...ctx.db.branch.sessionId.filter(sessionRow.id)]) {
+    ctx.db.branch.id.delete(row.id);
+  }
+
+  candidates.forEach((candidate, index) => {
+    const row = ctx.db.branchCandidate.insert({
+      id: 0n,
+      sessionId: sessionRow.id,
+      eventId: sessionRow.eventId,
+      batch,
+      signature: candidate.signature,
+      levers: JSON.stringify(candidate.levers),
+      stats: JSON.stringify(candidate.stats),
+      source: candidate.source,
+      shownAt: index < BRANCHES_SHOWN ? ctx.timestamp : undefined,
+    });
+
+    if (index >= BRANCHES_SHOWN) return;
+
+    // Goal titles live in the database, not the engine, so naming happens here.
+    const named = {
+      name: templateName(candidate.levers, input.goals, label),
+      summary: templateSummary(candidate.stats, titleOf),
+    };
+    ctx.db.branch.insert({
+      id: 0n,
+      sessionId: sessionRow.id,
+      candidateId: row.id,
+      // The engine holds no titles, so it names by goal id; swap the real one in.
+      name: named.name.replace(
+        /^(Move|Smaller) (\S+)/,
+        (_full, verb: string, goalId: string) => `${verb} ${titleOf(goalId)}`
+      ),
+      summary: named.summary,
+      nameSource: 'template',
+      position: index,
+    });
+  });
+}
+
+export const startSession = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
+  const caller = requireHuman(ctx);
+  const event = ctx.db.lifeEvent.id.find(eventId);
+  if (!event || event.householdId !== caller.householdId) {
+    throw new SenderError('event not found');
+  }
+  // Only one session open per household (08 Live Session Spec).
+  const existing = openSessionFor(ctx, caller.householdId);
+  if (existing) {
+    if (existing.eventId === eventId) return;
+    ctx.db.session.id.update({ ...existing, status: 'closed' });
+  }
+
+  const created = ctx.db.session.insert({
+    id: 0n,
+    householdId: caller.householdId,
+    eventId,
+    status: 'open',
+    startedBy: caller.id,
+    committedBranchId: undefined,
+    startedAt: ctx.timestamp,
+  });
+
+  postMessage(ctx, caller.householdId, {
+    kind: 'system',
+    text: 'Looking for paths forward…',
+    authorMemberId: caller.id,
+    refId: created.id,
+  });
+});
+
+export const generateCandidates = spacetimedb.reducer(
+  { sessionId: t.u64() },
+  (ctx, { sessionId }) => {
+    const caller = requireHuman(ctx);
+    const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
+    const input = sessionInput(ctx, sessionRow.householdId, sessionRow.eventId);
+
+    const candidates = viaEngine(() =>
+      generateCandidatesWithEngine(input, { constraints: constraintsFor(ctx, sessionId) })
+    );
+    writeCandidatesAndBranches(ctx, sessionRow, candidates, 0);
+  }
+);
+
+/**
+ * Show other paths — honouring locks and never repeating a lever set already
+ * offered this session (08 Live Session Spec#Locks and rerolls).
+ *
+ * OPEN(OD-5): unlimited rerolls; when nothing new fits, the UI says "these are
+ * all the paths that fit what you've locked."
+ */
+export const reroll = spacetimedb.reducer({ sessionId: t.u64() }, (ctx, { sessionId }) => {
+  const caller = requireHuman(ctx);
+  const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
+  const input = sessionInput(ctx, sessionRow.householdId, sessionRow.eventId);
+
+  const allCandidates = [...ctx.db.branchCandidate.sessionId.filter(sessionId)];
+  const shown = allCandidates
+    .filter(c => c.shownAt !== undefined && c.shownAt !== null)
+    .map(c => c.signature);
+  const batch = allCandidates.reduce((max, c) => Math.max(max, c.batch), 0) + 1;
+
+  const candidates = viaEngine(() =>
+    generateCandidatesWithEngine(input, {
+      constraints: constraintsFor(ctx, sessionId),
+      exclude: shown,
+    })
+  );
+
+  if (candidates.length === 0) {
+    postMessage(ctx, caller.householdId, {
+      kind: 'system',
+      text: "These are all the paths that fit what you've locked.",
+      refId: sessionId,
+    });
+    return;
+  }
+  writeCandidatesAndBranches(ctx, sessionRow, candidates, batch);
+});
+
+export const addConstraint = spacetimedb.reducer(
+  { sessionId: t.u64(), kind: t.string(), target: t.string() },
+  (ctx, { sessionId, kind, target }) => {
+    const caller = requireHuman(ctx);
+    sessionOrReject(ctx, sessionId, caller.householdId);
+    if (kind !== 'lock' && kind !== 'pin') throw new SenderError('kind must be lock or pin');
+
+    const parsed = viaEngine(() => JSON.parse(target) as Constraint);
+    const allowed = ['goalOnTime', 'goalFullSize', 'noExtraSaving', 'saveMoreAtMost'];
+    if (!allowed.includes(parsed.kind)) throw new SenderError(`unknown constraint: ${parsed.kind}`);
+
+    // A member gets one pin (08 Live Session Spec), so a new one replaces it.
+    if (kind === 'pin') {
+      for (const existing of [...ctx.db.constraint.sessionId.filter(sessionId)]) {
+        if (existing.memberId === caller.id && existing.kind === 'pin' && existing.active) {
+          ctx.db.constraint.id.update({ ...existing, active: false });
+        }
+      }
+    }
+
+    ctx.db.constraint.insert({
+      id: 0n,
+      sessionId,
+      memberId: caller.id,
+      kind,
+      target: JSON.stringify(parsed),
+      active: true,
+    });
+  }
+);
+
+export const removeConstraint = spacetimedb.reducer(
+  { constraintId: t.u64() },
+  (ctx, { constraintId }) => {
+    const caller = requireHuman(ctx);
+    const existing = ctx.db.constraint.id.find(constraintId);
+    if (!existing) throw new SenderError('constraint not found');
+    sessionOrReject(ctx, existing.sessionId, caller.householdId);
+    if (existing.memberId !== caller.id) throw new SenderError('that is not yours to remove');
+    ctx.db.constraint.id.update({ ...existing, active: false });
+  }
+);
+
+/**
+ * Bridge branches honouring every member's pin, or the closest-option
+ * statements when none exists (08 Live Session Spec#Pins and bridge branches).
+ *
+ * No AI tiebreaker, ever: two deterministic statements about what it would take.
+ */
+export const requestBridge = spacetimedb.reducer(
+  { sessionId: t.u64() },
+  (ctx, { sessionId }) => {
+    const caller = requireHuman(ctx);
+    const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
+    const input = sessionInput(ctx, sessionRow.householdId, sessionRow.eventId);
+    const pins = constraintsFor(ctx, sessionId, 'pin');
+    if (pins.length === 0) throw new SenderError('nobody has pinned anything yet');
+
+    const shown = [...ctx.db.branchCandidate.sessionId.filter(sessionId)]
+      .filter(c => c.shownAt !== undefined && c.shownAt !== null)
+      .map(c => c.signature);
+
+    const bridges = viaEngine(() => generateBridgesWithEngine(input, pins, shown));
+
+    if (bridges.length > 0) {
+      const batch =
+        [...ctx.db.branchCandidate.sessionId.filter(sessionId)].reduce(
+          (max, c) => Math.max(max, c.batch),
+          0
+        ) + 1;
+      writeCandidatesAndBranches(ctx, sessionRow, bridges, batch);
+      return;
+    }
+
+    const closest = viaEngine(() => closestOptionWithEngine(input, pins));
+    const goalTitles = new Map(
+      [...ctx.db.goal.householdId.filter(sessionRow.householdId)].map(g => [String(g.id), g.title])
+    );
+    const lines: string[] = [];
+    if (closest.saveMore !== null) {
+      lines.push(`saving $${closest.saveMore} more a month would honour both`);
+    }
+    for (const [goalId, months] of Object.entries(closest.delayByGoalId)) {
+      if (months === null) continue;
+      lines.push(`letting ${goalTitles.get(goalId) ?? goalId} move ${months} months would make a path possible`);
+    }
+
+    postMessage(ctx, caller.householdId, {
+      kind: 'system',
+      text:
+        lines.length === 0
+          ? 'No path in range honours both of those. You can always keep the plan as it is.'
+          : `Nothing fits both pins exactly. ${lines.join('; ')}.`,
+      refId: sessionId,
+      payload: closest,
+    });
+  }
+);
+
+/**
+ * Drag a slider — 08 Live Session Spec#Live tuning.
+ *
+ * Replaces the branch's levers and stats for everyone, marking it `custom`.
+ * Values outside the lever's domain are **clamped** rather than rejected, since
+ * a slider should never throw. A tuned branch may become infeasible; it then
+ * shows its at-risk goals instead of blocking.
+ */
+export const tuneLever = spacetimedb.reducer(
+  { branchId: t.u64(), lever: t.string(), goalId: t.option(t.u64()), value: t.i32() },
+  (ctx, { branchId, lever, goalId, value }) => {
+    const caller = requireHuman(ctx);
+    const branchRow = ctx.db.branch.id.find(branchId);
+    if (!branchRow) throw new SenderError('branch not found');
+    const sessionRow = sessionOrReject(ctx, branchRow.sessionId, caller.householdId);
+    const candidate = ctx.db.branchCandidate.id.find(branchRow.candidateId);
+    if (!candidate) throw new SenderError('candidate not found');
+
+    const input = sessionInput(ctx, sessionRow.householdId, sessionRow.eventId);
+    const levers = JSON.parse(candidate.levers) as Levers;
+    // Mutable working copies: `Levers` holds readonly records, so the slider
+    // builds its own maps and hands back a fresh lever set.
+    const delays: Record<string, number> = { ...(levers.delays ?? {}) };
+    const shrinks: Record<string, number> = { ...(levers.shrinks ?? {}) };
+    let saveMoreValue = levers.saveMore ?? 0;
+
+    if (lever === 'saveMore') {
+      const cap = saveMoreCap(input.baseline.flexible);
+      const steps = Math.round(value / SAVE_MORE_STEP) * SAVE_MORE_STEP;
+      saveMoreValue = Math.max(0, Math.min(cap, steps));
+    } else if (lever === 'delay' || lever === 'shrink') {
+      if (goalId === undefined || goalId === null) throw new SenderError('which goal?');
+      const key = String(goalId);
+      const goal = input.goals.find(g => g.id === key);
+      if (!goal) throw new SenderError('goal not found');
+      const domain = lever === 'delay' ? delayDomain(goal) : shrinkDomain(goal);
+      if (domain.length === 0) {
+        throw new SenderError(
+          lever === 'shrink' ? 'a must-have goal cannot be made smaller' : 'that goal cannot move'
+        );
+      }
+      const lowest = domain[0]!;
+      const highest = domain[domain.length - 1]!;
+      const clamped = value <= 0 ? 0 : Math.max(lowest, Math.min(highest, value));
+      const bucket = lever === 'delay' ? delays : shrinks;
+      if (clamped === 0) delete bucket[key];
+      else bucket[key] = clamped;
+    } else {
+      throw new SenderError(`unknown lever: ${lever}`);
+    }
+
+    const next: Levers = { delays, shrinks, saveMore: saveMoreValue };
+
+    const reference = viaEngine(() => simulateWithEngine(input));
+    const stats = viaEngine(() => statsFor(input, next, reference));
+
+    ctx.db.branchCandidate.id.update({
+      ...candidate,
+      signature: leverSetSignature(next),
+      levers: JSON.stringify(next),
+      stats: JSON.stringify(stats),
+      source: 'custom',
+    });
+
+    const goalTitles = new Map(
+      [...ctx.db.goal.householdId.filter(sessionRow.householdId)].map(g => [String(g.id), g.title])
+    );
+    ctx.db.branch.id.update({
+      ...branchRow,
+      summary: templateSummary(stats, id => goalTitles.get(id) ?? id),
+      name: `${branchRow.name.replace(/ · tuned$/, '')} · tuned`,
+    });
+  }
+);
+
+/**
+ * Commit a branch — the temporary single-user confirm Stage 7 replaces with the
+ * ready check.
+ *
+ * Applies the levers, marks the event applied and recomputes the plan, all in
+ * one transaction (05 Data Model#Rules).
+ *
+ * How levers land:
+ *  - a **delay** moves `targetMonth` and leaves `originalTargetMonth` behind, so
+ *    the move stays visible;
+ *  - a **shrink** is stored as `committedShrinkPct` against the untouched
+ *    original cost;
+ *  - **saveMore** becomes a `plan_commitment`, not an edit to the inferred
+ *    baseline — the baseline means "what we observed", this means "what we
+ *    decided".
+ */
+export const commitBranch = spacetimedb.reducer({ branchId: t.u64() }, (ctx, { branchId }) => {
+  const caller = requireHuman(ctx);
+  const branchRow = ctx.db.branch.id.find(branchId);
+  if (!branchRow) throw new SenderError('branch not found');
+  const sessionRow = sessionOrReject(ctx, branchRow.sessionId, caller.householdId);
+  if (sessionRow.status !== 'open') throw new SenderError('this session is already settled');
+  const candidate = ctx.db.branchCandidate.id.find(branchRow.candidateId);
+  if (!candidate) throw new SenderError('candidate not found');
+
+  const levers = JSON.parse(candidate.levers) as Levers;
+
+  for (const goal of [...ctx.db.goal.householdId.filter(sessionRow.householdId)]) {
+    const key = String(goal.id);
+    const delay = levers.delays?.[key] ?? 0;
+    const shrink = levers.shrinks?.[key] ?? 0;
+    if (delay === 0 && shrink === 0) continue;
+    ctx.db.goal.id.update({
+      ...goal,
+      targetMonth: Math.min(120, goal.targetMonth + delay),
+      committedShrinkPct: Math.min(100, goal.committedShrinkPct + shrink),
+    });
+  }
+
+  const saveMore = levers.saveMore ?? 0;
+  const existingCommitment = ctx.db.planCommitment.householdId.find(sessionRow.householdId);
+  const commitmentRow = {
+    householdId: sessionRow.householdId,
+    saveMoreCents: (existingCommitment?.saveMoreCents ?? 0) + toIntegerCents(saveMore),
+    fromBranchId: branchId,
+    committedAt: ctx.timestamp,
+  };
+  if (existingCommitment) ctx.db.planCommitment.householdId.update(commitmentRow);
+  else ctx.db.planCommitment.insert(commitmentRow);
+
+  const event = ctx.db.lifeEvent.id.find(sessionRow.eventId);
+  if (event) ctx.db.lifeEvent.id.update({ ...event, status: 'applied' });
+
+  ctx.db.session.id.update({ ...sessionRow, status: 'committed', committedBranchId: branchId });
+
+  recomputeProjection(ctx, sessionRow.householdId, caller.id);
+
+  postMessage(ctx, sessionRow.householdId, {
+    kind: 'system',
+    text: `This is your plan now: ${branchRow.name}.`,
+    refId: sessionRow.id,
+  });
+});
+
+export const closeSession = spacetimedb.reducer({ sessionId: t.u64() }, (ctx, { sessionId }) => {
+  const caller = requireHuman(ctx);
+  const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
+  if (sessionRow.status !== 'open') return;
+  // The event stays active so the session can be resumed (08 Live Session Spec).
+  ctx.db.session.id.update({ ...sessionRow, status: 'closed' });
+});
 
 // ---------------------------------------------------------------------------
 // Stage 0 sync canary — see schema.ts

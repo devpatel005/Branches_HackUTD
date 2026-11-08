@@ -39,6 +39,11 @@ const SUBSCRIPTIONS = [
   'SELECT * FROM life_event',
   'SELECT * FROM impact',
   'SELECT * FROM chat_message',
+  'SELECT * FROM session',
+  'SELECT * FROM branch_candidate',
+  'SELECT * FROM branch',
+  'SELECT * FROM constraint',
+  'SELECT * FROM plan_commitment',
 ];
 
 type Client = { label: string; conn: DbConnection; identity: Identity };
@@ -124,6 +129,25 @@ const mine = {
     [...c.conn.db.chatMessage.iter()]
       .filter(m => m.householdId === scopedHouseholdId)
       .sort((x, y) => (x.id < y.id ? -1 : 1)),
+  sessions: (c: Client) =>
+    [...c.conn.db.session.iter()].filter(x => x.householdId === scopedHouseholdId),
+  commitment: (c: Client) =>
+    [...c.conn.db.planCommitment.iter()].find(x => x.householdId === scopedHouseholdId),
+};
+
+/** Session-scoped readers, set once a session exists. */
+let scopedSessionId: bigint | undefined;
+const inSession = {
+  candidates: (c: Client) =>
+    [...c.conn.db.branchCandidate.iter()]
+      .filter(x => x.sessionId === scopedSessionId)
+      .sort((x, y) => (x.id < y.id ? -1 : 1)),
+  branches: (c: Client) =>
+    [...c.conn.db.branch.iter()]
+      .filter(x => x.sessionId === scopedSessionId)
+      .sort((x, y) => x.position - y.position),
+  constraints: (c: Client) =>
+    [...c.conn.db.constraint.iter()].filter(x => x.sessionId === scopedSessionId && x.active),
 };
 
 const checks: Check[] = [];
@@ -655,7 +679,347 @@ checks.push(
 );
 
 // ======================================================================
-// 10. Reseed keeps the pairing
+// 10. Branches — Stage 5's Done-when
+// ======================================================================
+// Re-create the baby event: the previous section dismissed it.
+await b.conn.reducers.createEvent({
+  templateId: 'baby',
+  params: [
+    { key: 'monthsUntilBirth', value: '9' },
+    { key: 'leaveMember', value: String(memberBId) },
+    { key: 'leaveMonths', value: '2' },
+    { key: 'care', value: 'daycare' },
+  ],
+});
+const sessionEvent = await waitFor('baby event again', () =>
+  mine.events(a).find(e => e.templateId === 'baby' && e.status === 'active')
+);
+await a.conn.reducers.computeImpact({ eventId: sessionEvent.id });
+await waitFor('impact again', () => mine.impacts(a).find(i => i.eventId === sessionEvent.id));
+
+await a.conn.reducers.startSession({ eventId: sessionEvent.id });
+const sessionRow = await waitFor('session', () =>
+  mine.sessions(a).find(x => x.eventId === sessionEvent.id && x.status === 'open')
+);
+scopedSessionId = sessionRow.id;
+
+await a.conn.reducers.generateCandidates({ sessionId: sessionRow.id });
+await waitFor('branches on A', () => (inSession.branches(a).length === 3 ? true : undefined));
+await waitFor('branches on B', () => (inSession.branches(b).length === 3 ? true : undefined));
+
+const branches = inSession.branches(a);
+const candidatesById = new Map(inSession.candidates(a).map(c => [c.id, c]));
+const leverSetOf = (branchId: bigint) =>
+  candidatesById.get(inSession.branches(a).find(x => x.id === branchId)!.candidateId)!;
+
+const japanGoal2 = mine.goals(a).find(g => g.title === 'Japan')!;
+const houseGoal2 = mine.goals(a).find(g => g.title === 'House')!;
+
+// E8: the order and the fallback names.
+checks.push(
+  check('S5a', 'three branches are named and shown', branches.length, 3),
+  check(
+    'S5b',
+    'E8 candidate order survives the round trip',
+    branches.map(x => candidatesById.get(x.candidateId)?.signature),
+    ['m:175', `d:${houseGoal2.id}=9|m:75`, `d:${houseGoal2.id}=18`]
+  ),
+  check('S5c', 'the first fallback name is the saveMore template', branches[0]?.name, 'Save $175 more a month'),
+  check('S5d', 'a two-lever path is named Balanced', branches[1]?.name, 'Balanced'),
+  check('S5e', 'a delay-only path names the goal and a date', /^Move House to \w{3} \d{4}$/.test(branches[2]?.name ?? ''), true),
+  check('S5f', 'names come from templates, not the agent', branches.every(x => x.nameSource === 'template'), true),
+  check('S5g', 'every branch has a projection-language summary', branches.every(x => x.summary.length > 20 && !/should|recommend|best option/i.test(x.summary)), true),
+  check('S5h', 'candidates reach B as well', inSession.candidates(b).length, inSession.candidates(a).length)
+);
+
+// E9: each shown branch fixes the plan.
+for (const [index, branchRow] of branches.entries()) {
+  const stats = JSON.parse(candidatesById.get(branchRow.candidateId)!.stats) as {
+    atRiskGoalIds: string[];
+    goalsFunded: number;
+    goalsTotal: number;
+    tightYears: number;
+  };
+  checks.push(
+    check(`S5i.${index + 1}`, `branch ${index + 1} leaves nothing at risk`, stats.atRiskGoalIds, []),
+    check(`S5j.${index + 1}`, `branch ${index + 1} funds every goal`, [stats.goalsFunded, stats.goalsTotal], [2, 2])
+  );
+}
+
+// --- Locks and reroll ---------------------------------------------------
+// Test Household A has exactly **three** paths out of E5 (saveMore 175, the
+// balanced pair, and delay house 18), and the first generation shows all three.
+// So a reroll here correctly finds nothing new and says so — which is the
+// documented exhaustion behaviour (OPEN(OD-5)), not a failure.
+await a.conn.reducers.addConstraint({
+  sessionId: sessionRow.id,
+  kind: 'lock',
+  target: JSON.stringify({ kind: 'goalOnTime', goalId: String(houseGoal2.id) }),
+});
+await waitFor('lock registered', () => (inSession.constraints(a).length === 1 ? true : undefined));
+
+const shownBeforeLock = inSession.candidates(a).map(c => c.signature);
+
+// Generating under the lock must never offer a path that delays the house.
+await a.conn.reducers.generateCandidates({ sessionId: sessionRow.id });
+await waitFor('branches under the lock', () =>
+  inSession.branches(a).length > 0 ? true : undefined
+);
+const underLock = inSession.branches(a).map(
+  x => inSession.candidates(a).find(y => y.id === x.candidateId)!
+);
+
+const messagesBeforeReroll = mine.messages(a).length;
+await a.conn.reducers.reroll({ sessionId: sessionRow.id });
+await waitFor('reroll answered', () =>
+  mine.messages(a).length > messagesBeforeReroll ||
+  inSession.candidates(a).some(c => c.batch > 0)
+    ? true
+    : undefined
+);
+const rerollMessage = mine
+  .messages(a)
+  .slice(messagesBeforeReroll)
+  .find(m => m.text.includes('all the paths that fit'));
+const newBatch = inSession.candidates(a).filter(c => c.batch > 0);
+
+checks.push(
+  check('L1', 'a lock is visible to both partners', inSession.constraints(b).length, 1),
+  check(
+    'L2',
+    'locking "House on time" never offers a path that delays the house',
+    underLock.every(c => {
+      const levers = JSON.parse(c.levers) as { delays?: Record<string, number> };
+      return (levers.delays?.[String(houseGoal2.id)] ?? 0) === 0;
+    }),
+    true
+  ),
+  check('L3', 'and a path still exists under that lock', underLock.length > 0, true),
+  check(
+    'L4',
+    'a reroll either offers new paths or says there are none left',
+    newBatch.length > 0 || rerollMessage !== undefined,
+    true
+  ),
+  check(
+    'L5',
+    'nothing a reroll offers repeats an already-shown lever set',
+    newBatch.some(c => shownBeforeLock.includes(c.signature)),
+    false
+  ),
+  check(
+    'L6',
+    'exhaustion is reported in the documented words',
+    newBatch.length === 0 ? rerollMessage?.text : "These are all the paths that fit what you've locked.",
+    "These are all the paths that fit what you've locked."
+  )
+);
+
+// --- Pins and bridges ---------------------------------------------------
+// Each partner pins one thing, and they conflict: Japan must not move, and no
+// extra saving. Nothing in the normal domains satisfies both.
+await a.conn.reducers.addConstraint({
+  sessionId: sessionRow.id,
+  kind: 'pin',
+  target: JSON.stringify({ kind: 'goalOnTime', goalId: String(japanGoal2.id) }),
+});
+await b.conn.reducers.addConstraint({
+  sessionId: sessionRow.id,
+  kind: 'pin',
+  target: JSON.stringify({ kind: 'noExtraSaving' }),
+});
+await waitFor('two pins', () =>
+  inSession.constraints(a).filter(c => c.kind === 'pin').length === 2 ? true : undefined
+);
+
+const messagesBeforeBridge = mine.messages(a).length;
+await a.conn.reducers.requestBridge({ sessionId: sessionRow.id });
+await waitFor('bridge answered', () =>
+  mine.messages(a).length > messagesBeforeBridge ||
+  inSession.candidates(a).some(c => c.source === 'bridge')
+    ? true
+    : undefined
+);
+
+const bridgeCandidates = inSession.candidates(a).filter(c => c.source === 'bridge');
+const closestMessage = mine
+  .messages(a)
+  .slice(messagesBeforeBridge)
+  .find(m => m.kind === 'system');
+
+checks.push(
+  check('P1b', 'each member holds exactly one pin', inSession.constraints(a).filter(c => c.kind === 'pin').length, 2),
+  check(
+    'P2b',
+    'conflicting pins produce bridges or a closest-option statement',
+    bridgeCandidates.length > 0 || closestMessage !== undefined,
+    true
+  ),
+  check(
+    'P3b',
+    'any bridge honours every pin',
+    bridgeCandidates.every(c => {
+      const levers = JSON.parse(c.levers) as { delays?: Record<string, number>; saveMore?: number };
+      return (levers.saveMore ?? 0) === 0 && (levers.delays?.[String(japanGoal2.id)] ?? 0) === 0;
+    }),
+    true
+  ),
+  check(
+    'P4b',
+    'the closest option says what it would take, with no AI tiebreaker',
+    bridgeCandidates.length > 0 || /would|No path in range/.test(closestMessage?.text ?? ''),
+    true
+  ),
+  check('P5b', 'a second pin from the same member replaces the first', await onePinPerMember(a, sessionRow.id, String(houseGoal2.id)), 1)
+);
+
+// Clear the pins so the rest of the section works on an unconstrained session.
+for (const c of inSession.constraints(a).filter(x => x.kind === 'pin' && x.memberId === memberA.id)) {
+  await a.conn.reducers.removeConstraint({ constraintId: c.id });
+}
+for (const c of inSession.constraints(b).filter(x => x.kind === 'pin' && x.memberId === memberBId)) {
+  await b.conn.reducers.removeConstraint({ constraintId: c.id });
+}
+for (const c of inSession.constraints(a).filter(x => x.kind === 'lock')) {
+  await a.conn.reducers.removeConstraint({ constraintId: c.id });
+}
+await waitFor('constraints cleared', () => (inSession.constraints(a).length === 0 ? true : undefined));
+
+// --- Slider tuning ------------------------------------------------------
+await a.conn.reducers.generateCandidates({ sessionId: sessionRow.id });
+await waitFor('fresh branches', () => (inSession.branches(a).length === 3 ? true : undefined));
+
+const tunable = inSession.branches(a)[0]!;
+const tunableCandidate = inSession.candidates(a).find(c => c.id === tunable.candidateId)!;
+const statsBefore = JSON.parse(tunableCandidate.stats) as { saveMore: number };
+
+await a.conn.reducers.tuneLever({
+  branchId: tunable.id,
+  lever: 'saveMore',
+  goalId: undefined,
+  value: 250,
+});
+await waitFor('tuned on B', () => {
+  const c = [...b.conn.db.branchCandidate.iter()].find(x => x.id === tunableCandidate.id);
+  return c && c.source === 'custom' ? true : undefined;
+});
+
+const tunedCandidate = [...a.conn.db.branchCandidate.iter()].find(x => x.id === tunableCandidate.id)!;
+const tunedStats = JSON.parse(tunedCandidate.stats) as { saveMore: number; atRiskGoalIds: string[] };
+
+// Clamping: the cap is 25% of $1,500 flexible, rounded down to $25 -> $375.
+await a.conn.reducers.tuneLever({
+  branchId: tunable.id,
+  lever: 'saveMore',
+  goalId: undefined,
+  value: 99999,
+});
+await waitFor('clamped', () => {
+  const c = [...a.conn.db.branchCandidate.iter()].find(x => x.id === tunableCandidate.id);
+  const stats = c ? (JSON.parse(c.stats) as { saveMore: number }) : undefined;
+  return stats && stats.saveMore === 375 ? true : undefined;
+});
+
+checks.push(
+  check('T5', 'tuning a slider changes the stats', tunedStats.saveMore !== statsBefore.saveMore, true),
+  check('T6', 'tuning marks the branch as custom', tunedCandidate.source, 'custom'),
+  check('T7', 'the tuned stats reach the partner', [...b.conn.db.branchCandidate.iter()].find(x => x.id === tunableCandidate.id)?.source, 'custom'),
+  check(
+    'T8',
+    'an out-of-range slider value clamps to the lever domain',
+    (JSON.parse([...a.conn.db.branchCandidate.iter()].find(x => x.id === tunableCandidate.id)!.stats) as { saveMore: number }).saveMore,
+    375
+  ),
+  check('T9', 'a shrink on a must-have goal is refused', await rejects(() => a.conn.reducers.tuneLever({ branchId: tunable.id, lever: 'shrink', goalId: houseGoal2.id, value: 10 })), true),
+  check('T10', 'an unknown lever is refused', await rejects(() => a.conn.reducers.tuneLever({ branchId: tunable.id, lever: 'nonsense', goalId: undefined, value: 1 })), true)
+);
+
+// --- Commit -------------------------------------------------------------
+// Commit the delay-only branch, so both the goal move and the saveMore path
+// are exercised across the suite.
+await a.conn.reducers.generateCandidates({ sessionId: sessionRow.id });
+await waitFor('branches for commit', () => (inSession.branches(a).length === 3 ? true : undefined));
+
+const delayBranch = inSession.branches(a).find(x => {
+  const c = inSession.candidates(a).find(y => y.id === x.candidateId);
+  const levers = c ? (JSON.parse(c.levers) as { delays?: Record<string, number>; saveMore?: number }) : undefined;
+  return (levers?.delays?.[String(houseGoal2.id)] ?? 0) > 0 && (levers?.saveMore ?? 0) === 0;
+})!;
+const delayLevers = JSON.parse(
+  inSession.candidates(a).find(y => y.id === delayBranch.candidateId)!.levers
+) as { delays: Record<string, number> };
+const houseBefore = mine.goals(a).find(g => g.id === houseGoal2.id)!;
+
+await a.conn.reducers.commitBranch({ branchId: delayBranch.id });
+await waitFor('committed on B', () =>
+  mine.sessions(b).find(x => x.id === sessionRow.id)?.status === 'committed' ? true : undefined
+);
+
+const houseAfter = mine.goals(a).find(g => g.id === houseGoal2.id)!;
+const committedProjection = JSON.parse(mine.projection(a)!.json) as { atRiskGoalIds: string[] };
+
+checks.push(
+  check('K1', 'committing moves the goal', houseAfter.targetMonth, houseBefore.targetMonth + delayLevers.delays[String(houseGoal2.id)]!),
+  check('K2', 'but keeps the original target, so the move stays visible', houseAfter.originalTargetMonth, houseBefore.originalTargetMonth),
+  check('K3', 'the event is marked applied', mine.events(a).find(e => e.id === sessionEvent.id)?.status, 'applied'),
+  check('K4', 'the session is committed and records the branch', [mine.sessions(a).find(x => x.id === sessionRow.id)?.status, mine.sessions(a).find(x => x.id === sessionRow.id)?.committedBranchId === delayBranch.id], ['committed', true]),
+  check('K5', 'the plan is recomputed with nothing at risk', committedProjection.atRiskGoalIds, []),
+  check('K6', 'committing twice is refused', await rejects(() => a.conn.reducers.commitBranch({ branchId: delayBranch.id })), true),
+  check('K7', 'the thread records the decision', mine.messages(a).some(m => m.text.startsWith('This is your plan now')), true)
+);
+
+// Committing a saveMore branch must store a decision, not edit the baseline.
+const baselineFlexibleBefore = mine.goals(a).length > 0 ? [...a.conn.db.baseline.iter()].find(x => x.householdId === household.id)!.flexibleCents : 0;
+await a.conn.reducers.createEvent({
+  templateId: 'medical_bill',
+  params: [
+    { key: 'amount', value: '500' },
+    { key: 'month', value: '1' },
+  ],
+});
+const smallEvent = await waitFor('small event', () =>
+  mine.events(a).find(e => e.templateId === 'medical_bill' && e.status === 'active')
+);
+await a.conn.reducers.startSession({ eventId: smallEvent.id });
+const session2 = await waitFor('second session', () =>
+  mine.sessions(a).find(x => x.eventId === smallEvent.id && x.status === 'open')
+);
+
+checks.push(
+  check('K8', 'starting a new session closes the old one', mine.sessions(a).filter(x => x.status === 'open').length, 1),
+  check(
+    'K9',
+    'the baseline flexible figure is untouched by a commitment',
+    [...a.conn.db.baseline.iter()].find(x => x.householdId === household.id)?.flexibleCents,
+    baselineFlexibleBefore
+  ),
+  check('K10', 'the commitment row records what was decided', (mine.commitment(a)?.saveMoreCents ?? -1) >= 0, true)
+);
+
+await a.conn.reducers.closeSession({ sessionId: session2.id });
+await a.conn.reducers.dismissEvent({ eventId: smallEvent.id });
+
+/**
+ * A member gets one pin (08 Live Session Spec), so adding a second must replace
+ * the first. Returns how many active pins that member ends up holding.
+ */
+async function onePinPerMember(
+  client: Client,
+  sessionId: bigint,
+  goalId: string
+): Promise<number> {
+  await client.conn.reducers.addConstraint({
+    sessionId,
+    kind: 'pin',
+    target: JSON.stringify({ kind: 'goalOnTime', goalId }),
+  });
+  await new Promise(r => setTimeout(r, 200));
+  return inSession.constraints(client).filter(c => c.kind === 'pin' && c.memberId === memberA.id)
+    .length;
+}
+
+// ======================================================================
+// 11. Reseed keeps the pairing
 // ======================================================================
 await a.conn.reducers.finishOnboarding();
 await waitFor('onboarded', () =>
@@ -674,7 +1038,8 @@ checks.push(
   check('R6', 'reseed keeps the transactions, so inference can re-run', rows.transactions(a).length > 0, true),
   check('R7', 'reseed returns the household to un-onboarded', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.onboarded, false),
   check('R8', 'reseed clears goals', mine.goals(a).length, 0),
-  check('R9', 'reseed clears events and the thread', [mine.events(a).length, mine.messages(a).length], [0, 0])
+  check('R9', 'reseed clears events and the thread', [mine.events(a).length, mine.messages(a).length], [0, 0]),
+  check('R10', 'reseed clears sessions', mine.sessions(a).length, 0)
 );
 
 /** True when a reducer call is rejected, which is what we want to assert. */

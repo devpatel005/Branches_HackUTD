@@ -34,10 +34,13 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AddConstraintReducer from "./add_constraint_reducer.ts";
 import AddGoalReducer from "./add_goal_reducer.ts";
 import AnswerEventParamReducer from "./answer_event_param_reducer.ts";
 import AnswerGapReducer from "./answer_gap_reducer.ts";
 import CheckAffordabilityReducer from "./check_affordability_reducer.ts";
+import CloseSessionReducer from "./close_session_reducer.ts";
+import CommitBranchReducer from "./commit_branch_reducer.ts";
 import ComputeImpactReducer from "./compute_impact_reducer.ts";
 import ConfirmAllMyItemsReducer from "./confirm_all_my_items_reducer.ts";
 import ConfirmItemReducer from "./confirm_item_reducer.ts";
@@ -47,10 +50,14 @@ import DismissEventReducer from "./dismiss_event_reducer.ts";
 import EditGoalReducer from "./edit_goal_reducer.ts";
 import EditItemReducer from "./edit_item_reducer.ts";
 import FinishOnboardingReducer from "./finish_onboarding_reducer.ts";
+import GenerateCandidatesReducer from "./generate_candidates_reducer.ts";
 import IncrementReducer from "./increment_reducer.ts";
 import JoinHouseholdReducer from "./join_household_reducer.ts";
 import RejectItemReducer from "./reject_item_reducer.ts";
+import RemoveConstraintReducer from "./remove_constraint_reducer.ts";
 import RemoveGoalReducer from "./remove_goal_reducer.ts";
+import RequestBridgeReducer from "./request_bridge_reducer.ts";
+import RerollReducer from "./reroll_reducer.ts";
 import ReseedHouseholdReducer from "./reseed_household_reducer.ts";
 import ResetReducer from "./reset_reducer.ts";
 import RunInferenceReducer from "./run_inference_reducer.ts";
@@ -60,13 +67,18 @@ import SetAssumptionsReducer from "./set_assumptions_reducer.ts";
 import SetDisplayNameReducer from "./set_display_name_reducer.ts";
 import SetFunMoneyReducer from "./set_fun_money_reducer.ts";
 import SetFunMoneyStatusReducer from "./set_fun_money_status_reducer.ts";
+import StartSessionReducer from "./start_session_reducer.ts";
+import TuneLeverReducer from "./tune_lever_reducer.ts";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
 import AssumptionRow from "./assumption_table.ts";
 import BaselineRow from "./baseline_table.ts";
+import BranchRow from "./branch_table.ts";
+import BranchCandidateRow from "./branch_candidate_table.ts";
 import ChatMessageRow from "./chat_message_table.ts";
+import ConstraintRow from "./constraint_table.ts";
 import CounterRow from "./counter_table.ts";
 import FunMoneyRow from "./fun_money_table.ts";
 import GapQuestionRow from "./gap_question_table.ts";
@@ -77,7 +89,9 @@ import InferredItemRow from "./inferred_item_table.ts";
 import LifeEventRow from "./life_event_table.ts";
 import MemberRow from "./member_table.ts";
 import OnboardingProgressRow from "./onboarding_progress_table.ts";
+import PlanCommitmentRow from "./plan_commitment_table.ts";
 import PlanProjectionRow from "./plan_projection_table.ts";
+import SessionRow from "./session_table.ts";
 import TransactionRow from "./transaction_table.ts";
 
 /** Type-only namespace exports for generated type groups. */
@@ -106,6 +120,34 @@ const tablesSchema = __schema({
       { name: 'baseline_household_id_key', constraint: 'unique', columns: ['householdId'] },
     ],
   }, BaselineRow),
+  branch: __table({
+    name: 'branch',
+    indexes: [
+      { accessor: 'id', name: 'branch_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'sessionId', name: 'branch_session_id_idx_btree', algorithm: 'btree', columns: [
+        'sessionId',
+      ] },
+    ],
+    constraints: [
+      { name: 'branch_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BranchRow),
+  branchCandidate: __table({
+    name: 'branch_candidate',
+    indexes: [
+      { accessor: 'id', name: 'branch_candidate_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'sessionId', name: 'branch_candidate_session_id_idx_btree', algorithm: 'btree', columns: [
+        'sessionId',
+      ] },
+    ],
+    constraints: [
+      { name: 'branch_candidate_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, BranchCandidateRow),
   chatMessage: __table({
     name: 'chat_message',
     indexes: [
@@ -120,6 +162,20 @@ const tablesSchema = __schema({
       { name: 'chat_message_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, ChatMessageRow),
+  constraint: __table({
+    name: 'constraint',
+    indexes: [
+      { accessor: 'id', name: 'constraint_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'sessionId', name: 'constraint_session_id_idx_btree', algorithm: 'btree', columns: [
+        'sessionId',
+      ] },
+    ],
+    constraints: [
+      { name: 'constraint_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ConstraintRow),
   counter: __table({
     name: 'counter',
     indexes: [
@@ -254,6 +310,17 @@ const tablesSchema = __schema({
       { name: 'member_identity_key', constraint: 'unique', columns: ['identity'] },
     ],
   }, MemberRow),
+  planCommitment: __table({
+    name: 'plan_commitment',
+    indexes: [
+      { accessor: 'householdId', name: 'plan_commitment_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+    ],
+    constraints: [
+      { name: 'plan_commitment_household_id_key', constraint: 'unique', columns: ['householdId'] },
+    ],
+  }, PlanCommitmentRow),
   planProjection: __table({
     name: 'plan_projection',
     indexes: [
@@ -265,6 +332,23 @@ const tablesSchema = __schema({
       { name: 'plan_projection_household_id_key', constraint: 'unique', columns: ['householdId'] },
     ],
   }, PlanProjectionRow),
+  session: __table({
+    name: 'session',
+    indexes: [
+      { accessor: 'eventId', name: 'session_event_id_idx_btree', algorithm: 'btree', columns: [
+        'eventId',
+      ] },
+      { accessor: 'householdId', name: 'session_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'session_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'session_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, SessionRow),
   transaction: __table({
     name: 'transaction',
     indexes: [
@@ -293,10 +377,13 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("add_constraint", AddConstraintReducer),
   __reducerSchema("add_goal", AddGoalReducer),
   __reducerSchema("answer_event_param", AnswerEventParamReducer),
   __reducerSchema("answer_gap", AnswerGapReducer),
   __reducerSchema("check_affordability", CheckAffordabilityReducer),
+  __reducerSchema("close_session", CloseSessionReducer),
+  __reducerSchema("commit_branch", CommitBranchReducer),
   __reducerSchema("compute_impact", ComputeImpactReducer),
   __reducerSchema("confirm_all_my_items", ConfirmAllMyItemsReducer),
   __reducerSchema("confirm_item", ConfirmItemReducer),
@@ -306,10 +393,14 @@ const reducersSchema = __reducers(
   __reducerSchema("edit_goal", EditGoalReducer),
   __reducerSchema("edit_item", EditItemReducer),
   __reducerSchema("finish_onboarding", FinishOnboardingReducer),
+  __reducerSchema("generate_candidates", GenerateCandidatesReducer),
   __reducerSchema("increment", IncrementReducer),
   __reducerSchema("join_household", JoinHouseholdReducer),
   __reducerSchema("reject_item", RejectItemReducer),
+  __reducerSchema("remove_constraint", RemoveConstraintReducer),
   __reducerSchema("remove_goal", RemoveGoalReducer),
+  __reducerSchema("request_bridge", RequestBridgeReducer),
+  __reducerSchema("reroll", RerollReducer),
   __reducerSchema("reseed_household", ReseedHouseholdReducer),
   __reducerSchema("reset", ResetReducer),
   __reducerSchema("run_inference", RunInferenceReducer),
@@ -319,6 +410,8 @@ const reducersSchema = __reducers(
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("set_fun_money", SetFunMoneyReducer),
   __reducerSchema("set_fun_money_status", SetFunMoneyStatusReducer),
+  __reducerSchema("start_session", StartSessionReducer),
+  __reducerSchema("tune_lever", TuneLeverReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

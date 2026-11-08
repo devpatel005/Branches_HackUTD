@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
 import { Body, Button, Caption, Notice, Row, SectionHeader } from './components';
@@ -16,7 +17,7 @@ import { colors, space, tabularNums, type as typeScale } from './theme';
  *
  * Goals affected with their shortfalls, tight years before and after, the
  * emergency-fund change, the free-to-plan change, and **Start planning
- * session** (inert until Stage 7).
+ * session**, which opens the session screen (Stage 5 onwards).
  *
  * Every number opens "Show the Math", and because an impact number is a
  * *difference*, its sheet also lists the event's attributed effects — the "why
@@ -31,9 +32,11 @@ export function ImpactCard({
   eventId: bigint;
   eventLabel: string;
 }) {
+  const router = useRouter();
   const household = useHousehold();
   const { goals } = useGoals();
   const dismissEvent = useReducer(reducers.dismissEvent);
+  const startSession = useReducer(reducers.startSession);
 
   const [math, setMath] = useState<{ label: string; path: string } | null>(null);
   const [whyOpen, setWhyOpen] = useState(false);
@@ -129,8 +132,18 @@ export function ImpactCard({
         />
       ) : (
         <>
-          {/* Inert until Stage 7 builds the live session. */}
-          <Button label="Start planning session" onPress={() => setError('Planning sessions arrive in a later stage.')} />
+          <Button
+            label="Start planning session"
+            onPress={async () => {
+              setError(null);
+              try {
+                await startSession({ eventId });
+                router.push('/session');
+              } catch (e) {
+                setError(messageOf(e));
+              }
+            }}
+          />
           <Button
             label="Keep the plan as it is"
             variant="quiet"

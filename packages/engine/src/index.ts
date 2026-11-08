@@ -51,6 +51,28 @@ export {
   isLiquidSavingsQuestion,
 } from './inference.ts';
 
+export {
+  generateCandidates,
+  generateBridges,
+  orderCandidates,
+  closestOption,
+  satisfiesConstraints,
+  leverSetSignature,
+  statsFor,
+  minimalLevers,
+  templateName,
+  templateSummary,
+  MAX_CANDIDATES,
+  CLOSEST_OPTION_MAX_SAVE_MORE,
+  CLOSEST_OPTION_STEP,
+  type Candidate,
+  type CandidateSource,
+  type CandidateStats,
+  type ClosestOption,
+  type Constraint,
+  type ConstraintKind,
+} from './branches.ts';
+
 export { simulate } from './simulate.ts';
 export { computeImpact, type ImpactOutput } from './impact.ts';
 export { describeEventEffects, type EffectLine } from './explain-events.ts';
