@@ -23,6 +23,7 @@ Start here. Claude Code reads [[CLAUDE]] first, then the current stage.
 | [[13 Open Decisions]] | Undecided items and the defaults to use meanwhile |
 | [[14 Research Notes]] | Condensed findings from team research, with flags |
 | [[15 Money and Rounding]] | How dollars become cents, and the one tie-breaking rule still open |
+| [[16 Dev Environment]] | How we run it while building: platform, hosts, firewall, toolchain |
 
 ## Build stages
 | Stage | Outcome |
