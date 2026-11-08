@@ -1084,6 +1084,10 @@ export const createEvent = spacetimedb.reducer(
       authorMemberId: caller.id,
       refId: event.id,
     });
+
+    // The form path behaves exactly like the typed path (Stage R, R1): the
+    // session opens here, not on a later tap.
+    advanceEvent(ctx, event, caller.id);
   }
 );
 
@@ -1119,30 +1123,32 @@ export const answerEventParam = spacetimedb.reducer(
     const outstanding = askedParams(event.templateId as LifeEventTemplateId).filter(
       param => merged[param] === undefined
     );
-    ctx.db.lifeEvent.id.update({
+    const updated = {
       ...event,
       params: JSON.stringify(merged),
       status: event.status === 'draft' && outstanding.length === 0 ? 'active' : event.status,
-    });
+    };
+    ctx.db.lifeEvent.id.update(updated);
+
+    // Answering the last follow-up is what starts the match (Stage R, R1).
+    // Still outstanding, and `advanceEvent` returns without doing anything.
+    advanceEvent(ctx, updated, caller.id);
   }
 );
 
 /**
- * Run the engine's impact for an event and store it.
+ * Run the engine's impact for an event and store it, returning the engine's
+ * output so a caller can react to `noImpact` without re-reading the row.
  *
- * The engine runs here, in the reducer, like every other number
+ * The engine runs here, inside the reducer, like every other number
  * (02 Ground Rules #1 and #7). A template whose parameters are still incomplete
  * throws from the engine's own validation, which is the right place for it.
+ *
+ * This function authorises **nothing** — see `advanceEvent` below for why that
+ * is deliberate. Every caller has already decided who is allowed to be here.
  */
-export const computeImpact = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
-  const caller = requireHuman(ctx);
-  const event = ctx.db.lifeEvent.id.find(eventId);
-  if (!event) throw new SenderError('event not found');
-  if (event.householdId !== caller.householdId) {
-    throw new SenderError('that event is not in your household');
-  }
-
-  const input = simulationInputFor(ctx, caller.householdId);
+function computeImpactFor(ctx: Ctx, event: EventRow) {
+  const input = simulationInputFor(ctx, event.householdId);
   if (!input) throw new SenderError('finish onboarding before adding an event');
   if (input.goals.length === 0) throw new SenderError('add a goal before adding an event');
 
@@ -1152,7 +1158,7 @@ export const computeImpact = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { e
   };
 
   const output = viaEngine(() =>
-    computeImpactWithEngine(input, lifeEventInput, memberNamesFor(ctx, caller.householdId))
+    computeImpactWithEngine(input, lifeEventInput, memberNamesFor(ctx, event.householdId))
   );
 
   // The before/after projections are each ~13 KB and the card needs neither in
@@ -1176,24 +1182,112 @@ export const computeImpact = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { e
     seriesAfter: output.after.series.monthly,
   };
 
-  const existing = ctx.db.impact.eventId.find(eventId);
+  const existing = ctx.db.impact.eventId.find(event.id);
   const row = {
-    eventId,
-    householdId: caller.householdId,
+    eventId: event.id,
+    householdId: event.householdId,
     json: JSON.stringify(stored),
     computedAt: ctx.timestamp,
   };
   if (existing) ctx.db.impact.eventId.update(row);
   else ctx.db.impact.insert(row);
 
-  postMessage(ctx, caller.householdId, {
+  postMessage(ctx, event.householdId, {
     kind: 'impact',
     text: output.noImpact
       ? "This doesn't change your goals."
       : `${output.newlyAtRiskGoalIds.length} goal${output.newlyAtRiskGoalIds.length === 1 ? '' : 's'} no longer fit.`,
-    refId: eventId,
+    refId: event.id,
   });
+
+  return output;
+}
+
+/** The fields of a `life_event` row that the Stage R chain reads. */
+type EventRow = {
+  id: bigint;
+  householdId: bigint;
+  templateId: string;
+  params: string;
+  status: string;
+  createdBy: bigint;
+};
+
+/** Recompute an impact on demand. The chain does this by itself (Stage R). */
+export const computeImpact = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
+  const caller = requireHuman(ctx);
+  const event = ctx.db.lifeEvent.id.find(eventId);
+  if (!event) throw new SenderError('event not found');
+  if (event.householdId !== caller.householdId) {
+    throw new SenderError('that event is not in your household');
+  }
+  computeImpactFor(ctx, event);
 });
+
+/**
+ * Carry an understood event all the way to three branches on the table
+ * (Stage R, phase R1). Impact, session, candidates, naming — one transaction.
+ *
+ * ## Why this exists
+ *
+ * Until Stage R the chain stopped twice, both times in the client: the impact
+ * was computed by a `useEffect` on the Chat screen, and the session was opened
+ * by a button on the impact card. So the Branches match only ever started if
+ * one partner was looking at the right screen and knew to tap — and the other
+ * partner was never pulled in at all.
+ *
+ * ## Why the helper split above was necessary
+ *
+ * `computeImpact` and `startSession` both begin with `requireHuman(ctx)`, and
+ * the caller that matters most here is `applyEventInterpretation` — the
+ * **agent**, writing back what it understood. Reusing the reducers was
+ * therefore impossible, which is the structural reason this was never wired.
+ * The bodies now live in functions that authorise nothing, and the public
+ * reducers are thin authorised wrappers, so the permission model is unchanged:
+ * the agent may *advance* an event it just interpreted, every number still
+ * comes from the engine inside a reducer (02 Ground Rules #1 and #7), and the
+ * agent still cannot commit a plan.
+ *
+ * ## Why it returns instead of throwing
+ *
+ * This runs in the same transaction as the agent's parse, so a throw here would
+ * roll back the interpretation too and the couple would see nothing at all.
+ * The three ordinary "not yet" cases below therefore return. Only a genuine
+ * engine failure rolls the transaction back, which is correct — a stored impact
+ * computed from a crash is worse than no impact.
+ *
+ * `actorId` is the human whose screen should follow the session (R3). It is
+ * never the agent: when the agent interpreted a typed sentence, the actor is
+ * the partner who typed it.
+ */
+function advanceEvent(ctx: Ctx, event: EventRow, actorId?: bigint): void {
+  // Still asking follow-ups. `answerEventParam` promotes the event to `active`
+  // and calls back here once nothing is outstanding.
+  if (event.status !== 'active') return;
+
+  // Already on the table — this is a re-entry, not a new event.
+  const openNow = openSessionFor(ctx, event.householdId);
+  if (openNow && openNow.eventId === event.id) return;
+
+  const input = simulationInputFor(ctx, event.householdId);
+  if (!input || input.goals.length === 0) {
+    postMessage(ctx, event.householdId, {
+      kind: 'system',
+      text: 'Add a goal and the projection can show what this changes.',
+      refId: event.id,
+    });
+    return;
+  }
+
+  const impact = computeImpactFor(ctx, event);
+  // `computeImpactFor` has already posted the "this doesn't change your goals"
+  // card. There is nothing to choose between, so no session opens.
+  if (impact.noImpact) return;
+
+  const sessionRow = startSessionFor(ctx, event, actorId);
+  generateFor(ctx, sessionRow);
+  queueBranchNaming(ctx, sessionRow);
+}
 
 export const dismissEvent = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
   const caller = requireHuman(ctx);
@@ -1630,72 +1724,101 @@ function writeCandidatesAndBranches(
   });
 }
 
-export const startSession = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
-  const caller = requireHuman(ctx);
-  const event = ctx.db.lifeEvent.id.find(eventId);
-  if (!event || event.householdId !== caller.householdId) {
-    throw new SenderError('event not found');
-  }
+/**
+ * Open the one session this household is allowed to have, for this event.
+ *
+ * Authorises nothing — see `advanceEvent`. Idempotent for the same event, so
+ * re-entry returns the existing row rather than restarting the match.
+ */
+function startSessionFor(ctx: Ctx, event: EventRow, actorId?: bigint) {
   // Only one session open per household (08 Live Session Spec).
-  const existing = openSessionFor(ctx, caller.householdId);
+  const existing = openSessionFor(ctx, event.householdId);
   if (existing) {
-    if (existing.eventId === eventId) return;
+    if (existing.eventId === event.id) return existing;
     ctx.db.session.id.update({ ...existing, status: 'closed' });
   }
 
+  // Whose screen follows the session automatically (Stage R, R3). The agent is
+  // never it: it has no screen, and `createdBy` is the agent on the typed path
+  // only because it was the one holding the pen.
+  const starter = humanMembers(ctx, event.householdId).find(
+    m => m.id === (actorId ?? event.createdBy)
+  );
+
   const created = ctx.db.session.insert({
     id: 0n,
-    householdId: caller.householdId,
-    eventId,
+    householdId: event.householdId,
+    eventId: event.id,
     status: 'open',
-    startedBy: caller.id,
+    startedBy: starter?.id ?? event.createdBy,
     committedBranchId: undefined,
     startedAt: ctx.timestamp,
   });
 
   // Enrol the starter immediately: their partner's invite banner keys off a
   // session they are not yet a member of.
-  const existingMembership = ctx.db.sessionMember.memberId.find(caller.id);
-  if (existingMembership) {
-    ctx.db.sessionMember.memberId.update({
-      ...existingMembership,
-      sessionId: created.id,
-      present: true,
-      selectedBranchId: undefined,
-      ready: false,
-      readyAt: undefined,
-    });
-  } else {
-    ctx.db.sessionMember.insert({
-      memberId: caller.id,
-      sessionId: created.id,
-      present: true,
-      selectedBranchId: undefined,
-      ready: false,
-      readyAt: undefined,
-    });
+  if (starter) {
+    const existingMembership = ctx.db.sessionMember.memberId.find(starter.id);
+    if (existingMembership) {
+      ctx.db.sessionMember.memberId.update({
+        ...existingMembership,
+        sessionId: created.id,
+        present: true,
+        selectedBranchId: undefined,
+        ready: false,
+        readyAt: undefined,
+      });
+    } else {
+      ctx.db.sessionMember.insert({
+        memberId: starter.id,
+        sessionId: created.id,
+        present: true,
+        selectedBranchId: undefined,
+        ready: false,
+        readyAt: undefined,
+      });
+    }
   }
 
-  postMessage(ctx, caller.householdId, {
+  postMessage(ctx, event.householdId, {
     kind: 'system',
     text: 'Looking for paths forward…',
-    authorMemberId: caller.id,
+    authorMemberId: starter?.id,
     refId: created.id,
   });
+
+  return created;
+}
+
+/** Open a session by hand. The chain does this by itself (Stage R). */
+export const startSession = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
+  const caller = requireHuman(ctx);
+  const event = ctx.db.lifeEvent.id.find(eventId);
+  if (!event || event.householdId !== caller.householdId) {
+    throw new SenderError('event not found');
+  }
+  startSessionFor(ctx, event, caller.id);
 });
 
+/** The first batch of paths for a fresh session. Authorises nothing. */
+function generateFor(
+  ctx: Ctx,
+  sessionRow: { id: bigint; householdId: bigint; eventId: bigint }
+): void {
+  const input = sessionInput(ctx, sessionRow.householdId, sessionRow.eventId);
+  const candidates = viaEngine(() =>
+    generateCandidatesWithEngine(input, { constraints: constraintsFor(ctx, sessionRow.id) })
+  );
+  writeCandidatesAndBranches(ctx, sessionRow, candidates, 0);
+  clearReady(ctx, sessionRow.id);
+}
+
+/** Generate by hand — the retry behind "No branches" (V9 S6). */
 export const generateCandidates = spacetimedb.reducer(
   { sessionId: t.u64() },
   (ctx, { sessionId }) => {
     const caller = requireHuman(ctx);
-    const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
-    const input = sessionInput(ctx, sessionRow.householdId, sessionRow.eventId);
-
-    const candidates = viaEngine(() =>
-      generateCandidatesWithEngine(input, { constraints: constraintsFor(ctx, sessionId) })
-    );
-    writeCandidatesAndBranches(ctx, sessionRow, candidates, 0);
-    clearReady(ctx, sessionId);
+    generateFor(ctx, sessionOrReject(ctx, sessionId, caller.householdId));
   }
 );
 
@@ -2333,6 +2456,37 @@ function reclaimStaleJobs(ctx: Ctx, householdId: bigint): number {
 }
 
 /**
+ * "Serve this household" — the one reducer behind the Menu tab's second button.
+ *
+ * Deliberately **not** agent-only, and deliberately takes no arguments: the
+ * whole point is that a partner staring at an agent that is ignoring them can
+ * fix it without reading a log, finding a join code, or editing a dotfile. The
+ * caller's own household is the only one they can ask for, so the worst a
+ * misuse can do is pull the agent to a household the caller already belongs to.
+ *
+ * `requireHuman` rather than `requireMember` so the agent cannot nominate
+ * itself; it has no business choosing who it serves.
+ *
+ * Why this exists at all: see `agent_request` in schema.ts.
+ */
+export const requestAgent = spacetimedb.reducer({}, ctx => {
+  const caller = requireHuman(ctx);
+  const row = {
+    householdId: caller.householdId,
+    requestedAt: ctx.timestamp,
+    requestedBy: caller.id,
+  };
+  // Re-tapping has to count, or a second attempt after a restart would look
+  // like nothing happened: the service moves on `requestedAt`, not on the row
+  // appearing, so the timestamp must advance every time.
+  if (ctx.db.agentRequest.householdId.find(caller.householdId)) {
+    ctx.db.agentRequest.householdId.update(row);
+  } else {
+    ctx.db.agentRequest.insert(row);
+  }
+});
+
+/**
  * Recover abandoned jobs, as its own reducer.
  *
  * The service calls this on connect and on a timer. A human cannot: like every
@@ -2538,11 +2692,20 @@ export const applyEventInterpretation = spacetimedb.reducer(
     params: t.array(ParamEntry),
     followUpPrompt: t.string(),
     followUpChips: t.array(t.string()),
+    /**
+     * The partner who typed the sentence, from the job input. Zero when the
+     * caller has nobody to name, which is why it is resolved rather than
+     * trusted: the event is attributed to a real human member or to the agent,
+     * never to a stranger's id.
+     */
+    memberId: t.u64(),
   },
-  (ctx, { templateId, params, followUpPrompt, followUpChips }) => {
+  (ctx, { templateId, params, followUpPrompt, followUpChips, memberId }) => {
     const agent = requireAgent(ctx);
     const template = EVENT_TEMPLATES[templateId as LifeEventTemplateId];
     if (!template) throw new SenderError(`unknown event: ${templateId}`);
+
+    const reporter = humanMembers(ctx, agent.householdId).find(m => m.id === memberId);
 
     const existing = activeEventFor(ctx, agent.householdId);
     if (existing) {
@@ -2561,7 +2724,9 @@ export const applyEventInterpretation = spacetimedb.reducer(
       // `draft` while follow-ups are outstanding: an impact computed from
       // half-known parameters would be worse than none.
       status: followUpPrompt.trim() ? 'draft' : 'active',
-      createdBy: agent.id,
+      // The event belongs to whoever reported it; the agent only read the
+      // sentence. `verify:flow` V3 checks this attribution.
+      createdBy: reporter?.id ?? agent.id,
       createdAt: ctx.timestamp,
     });
 
@@ -2577,6 +2742,11 @@ export const applyEventInterpretation = spacetimedb.reducer(
       payload: '',
       createdAt: ctx.timestamp,
     });
+
+    // The whole point of Stage R: understanding the sentence is what opens the
+    // session, in this transaction, for both partners. A draft (follow-ups
+    // outstanding) falls straight through — `answerEventParam` picks it up.
+    advanceEvent(ctx, event, reporter?.id);
   }
 );
 
@@ -2620,26 +2790,41 @@ export const applyConstraintTranslation = spacetimedb.reducer(
   }
 );
 
+/**
+ * Ask the agent to name the branches now on the table.
+ *
+ * Returns the number of candidates queued. Zero is not an error here: the
+ * branch names already have deterministic template fallbacks, so an unnamed
+ * batch is a cosmetic loss and must never roll back the session that produced
+ * it (07 Agent Spec#Deterministic fallbacks).
+ */
+function queueBranchNaming(ctx: Ctx, sessionRow: { id: bigint; householdId: bigint }): number {
+  const candidates = [...ctx.db.branchCandidate.sessionId.filter(sessionRow.id)]
+    .filter(c => c.shownAt !== undefined && c.shownAt !== null)
+    .map(c => ({
+      candidateId: String(c.id),
+      signature: c.signature,
+      stats: JSON.parse(c.stats) as unknown,
+    }));
+  if (candidates.length === 0) return 0;
+
+  queueJob(ctx, sessionRow.householdId, {
+    kind: 'select_branches',
+    input: { candidates },
+    sessionId: sessionRow.id,
+  });
+  return candidates.length;
+}
+
 /** Queue work the app cannot queue itself, e.g. naming a fresh batch. */
 export const requestBranchNaming = spacetimedb.reducer(
   { sessionId: t.u64() },
   (ctx, { sessionId }) => {
     const caller = requireHuman(ctx);
     const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
-    const candidates = [...ctx.db.branchCandidate.sessionId.filter(sessionId)]
-      .filter(c => c.shownAt !== undefined && c.shownAt !== null)
-      .map(c => ({
-        candidateId: String(c.id),
-        signature: c.signature,
-        stats: JSON.parse(c.stats) as unknown,
-      }));
-    if (candidates.length === 0) throw new SenderError('no candidates to name');
-
-    queueJob(ctx, caller.householdId, {
-      kind: 'select_branches',
-      input: { candidates },
-      sessionId: sessionRow.id,
-    });
+    if (queueBranchNaming(ctx, sessionRow) === 0) {
+      throw new SenderError('no candidates to name');
+    }
   }
 );
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useReducer } from 'spacetimedb/react';
@@ -104,17 +104,10 @@ export default function SessionScreen() {
     };
   }, [session?.id, joinSession, leaveSession]);
 
-  // Generate the first batch once, when the session has none.
-  const generated = useRef(new Set<string>());
-  useEffect(() => {
-    if (!session || branches.length > 0) return;
-    const key = String(session.id);
-    if (generated.current.has(key)) return;
-    generated.current.add(key);
-    generateCandidates({ sessionId: session.id })
-      .then(() => requestBranchNaming({ sessionId: session.id }).catch(() => undefined))
-      .catch(e => setError(messageOf(e)));
-  }, [session?.id, branches.length, generateCandidates, requestBranchNaming]);
+  // No generate effect here any more. `advanceEvent` writes the first batch in
+  // the same transaction that opens the session (Stage R, R1), so branches are
+  // already on the table by the time this screen mounts. The retry button
+  // below is the only client-side path left, and it is deliberate (V9 S6).
 
   if (!ready && !session) return <Loading label="Opening the session…" />;
   if (!session) {

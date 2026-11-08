@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -73,7 +73,6 @@ export default function ChatScreen() {
   const scrollRef = useRef<ScrollViewInstance>(null);
 
   const sendMessage = useReducer(reducers.sendMessage);
-  const computeImpact = useReducer(reducers.computeImpact);
   const answerEventParam = useReducer(reducers.answerEventParam);
 
   /**
@@ -92,26 +91,15 @@ export default function ChatScreen() {
     }
     try {
       await answerEventParam({ eventId, key: parsed.key, value: parsed.value });
-      attempted.current.delete(String(eventId));
     } catch (e) {
       setError(messageOf(e));
     }
   }
 
-  // Compute the impact for an active event that doesn't have one yet.
-  //
-  // Declarative rather than chained onto the form's submit: a reducer returns
-  // nothing, so the event id only exists once the subscription delivers the row.
-  // `attempted` makes this at-most-once per event, so a rejection (incomplete
-  // parameters, no goals yet) cannot turn into a retry loop.
-  const attempted = useRef(new Set<string>());
-  useEffect(() => {
-    if (!event || impact) return;
-    const key = String(event.id);
-    if (attempted.current.has(key)) return;
-    attempted.current.add(key);
-    computeImpact({ eventId: event.id }).catch(e => setError(messageOf(e)));
-  }, [event?.id, impact, computeImpact]);
+  // No impact effect here any more. The module computes the impact and opens
+  // the session in the same transaction that understands the event (Stage R,
+  // R1), so this screen no longer has to be open for the chain to run — which
+  // was the bug: nothing happened unless someone was looking at Chat.
 
   async function send() {
     setError(null);

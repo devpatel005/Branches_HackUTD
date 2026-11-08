@@ -30,6 +30,18 @@ Command: `verify:flow` (against a local or dev SpacetimeDB)
 3. Generate candidates → branch candidates match E6–E8 in order.
 4. Commit candidate 1 via ready check from both identities → projection matches E9 for that candidate.
 5. A non-agent identity calling an agent-only reducer is rejected; the agent identity calling a plan-changing reducer is rejected.
+6. **Stage R — the chain.** A third connection registers as the agent and drives the typed path. Each ID asserts on state that exists after a **single** reducer call, with no client in the loop, because the Stage R bug was exactly that the chain needed a client to continue it.
+
+| ID | Check | Expected |
+|---|---|---|
+| SR2a–SR2c2 | `applyEventInterpretation` with every parameter filled | event `active`, attributed to the partner who said it rather than to the agent, impact stored, and `noImpact` false — the last one is a guard, since an event that changes nothing is *supposed* to open nothing |
+| SR2d–SR2g | …and the session | opens by itself, `startedBy` is the reporter, the reporter is already present so their partner gets the banner, and the agent is never enrolled as a session member |
+| SR2h–SR2i | …and the branches | three on the table, and they reach the partner |
+| SR3a–SR3e | Same call with follow-ups outstanding | event stays `draft`; no session, no impact. Answering one of two asked parameters still opens nothing |
+| SR3f–SR3j | Answering the **last** follow-up | promotes the event, opens the session, three branches already on it, exactly one session open, and the superseded event is dismissed |
+| SR4a–SR4d | An event in a household with no goals | recorded without throwing, no session, no impact, and a system message in the thread saying why — a dead end here would roll back the agent's parse |
+
+Placement matters: the Stage R group runs **before** the commit in section 10. Afterwards the committed branch has already absorbed the baby event, every event correctly reports `noImpact`, and the whole group would pass vacuously. SR2c2 is the guard on that.
 
 ## V5 Agent contract
 Command: `verify:agent`
@@ -71,6 +83,14 @@ Scripted in `verify:flow` where possible, otherwise manual.
 | R6 | Members selected different branches and both ready | No commit |
 
 The Menu tab's single "Reset everything" button calls `reseedHousehold`, whose behaviour is already pinned by `verify:flow` R1–R9 — including that it keeps both members, the join code and the transactions. There is no separate suite for the button itself.
+
+The Menu tab's other button, "Bring the agent here", has no automated suite either — it needs a live agent service, which no suite assumes. Checked by hand on 2026-11-08, both directions, against a database with 24 households:
+| Case | Result |
+|---|---|
+| Pinned with `AGENT_JOIN_CODE`, `verify:flow` then creates two newer households | Agent stays put — this is the failure the button exists for, and the pin alone prevents it |
+| Request names a **newer** household than the pinned code | Moves in ~1s; log reads `serving household F44BRM (was KY4S9D) — asked for by a partner` |
+| Request names an **older** household id, and the pinned one | Moves in ~1s — the forward-only guard is bypassed for requests only |
+| Request older than `AGENT_REQUEST_WINDOW_MS` at start-up | Ignored; `AGENT_JOIN_CODE` wins |
 
 ## V8 UI checklist
 Manual.

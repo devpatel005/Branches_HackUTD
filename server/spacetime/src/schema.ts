@@ -476,6 +476,35 @@ export const counter = table(
   }
 );
 
+/**
+ * "Serve this household" — the Menu tab's one-button fix for an agent that has
+ * latched onto the wrong household.
+ *
+ * With no `AGENT_JOIN_CODE`, the service serves the **newest** household in the
+ * database. That is right on a clean database and wrong on a development one:
+ * `verify:flow` mints a fresh household on every run, so a verification run
+ * silently steals the agent, and the service's "only ever move to something
+ * strictly newer" guard means it can never come back on its own. The symptom is
+ * an agent that is plainly running and plainly ignoring you.
+ *
+ * A row here is a human saying which household is the live one, and it outranks
+ * both rules — including `AGENT_JOIN_CODE`, because a tap that just happened is
+ * better evidence than a value set at boot.
+ *
+ * One row per household; the newest `requestedAt` wins. Old rows are kept
+ * because they cost nothing and make "who asked, and when" readable in
+ * `spacetime sql`.
+ */
+export const agentRequest = table(
+  { name: 'agent_request', public: true },
+  {
+    householdId: t.u64().primaryKey(),
+    requestedAt: t.timestamp(),
+    /** Who tapped it, so the log can name them. */
+    requestedBy: t.u64(),
+  }
+);
+
 const spacetimedb = schema({
   household,
   member,
@@ -498,6 +527,7 @@ const spacetimedb = schema({
   reaction,
   planCommitment,
   agentJob,
+  agentRequest,
   counter,
 });
 

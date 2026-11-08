@@ -57,8 +57,25 @@ Visual rules: [[09 Design System]]. Every screen works on phone (Expo Go) and la
 - Post-commit: "This is your plan now" + agent summary + **View timeline**.
 
 ## Menu
-The fourth tab. Not part of the journey — it is the page you need *between* runs.
+The fourth tab. Not part of the journey — it is the page you need *between*
+runs, and the two things on it are the two ways a demo gets stuck.
 
+- **"Bring the agent here."** Writes an `agent_request` row; the service
+  prefers the newest one over both of its own targeting rules, including
+  `AGENT_JOIN_CODE`, and it is the only rule allowed to move the service
+  *backwards* to an older household id. Above the button, a row says whether
+  this household has an agent member row at all — which is what Chat's "no
+  agent is running" actually reports.
+  - Why it is needed: with no `AGENT_JOIN_CODE` the service serves the
+    **newest** household it can see. `verify:flow` mints one on every run, so a
+    verification run steals the agent, and the forward-only guard means it
+    never comes back. Before this button the fix was reading a log, finding a
+    join code and editing a dotfile mid-demo.
+  - A request only outranks `AGENT_JOIN_CODE` if it is recent
+    (`AGENT_REQUEST_WINDOW_MS`, 10 minutes). Otherwise a tap from last week
+    would beat the pinned code on every boot forever.
+  - The service polls, so the button reports what it *sent*; the agent row
+    above flips to "connected" on its own, within about a second.
 - **One button: "Reset everything."** Calls `reseedHousehold`, which clears the
   whole plan and sets `onboarded` back to false. `RouteGate` watches that flag,
   so one tap sends **both** devices back to the start of onboarding at once —
