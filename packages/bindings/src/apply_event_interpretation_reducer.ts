@@ -21,4 +21,5 @@ export default {
   },
   followUpPrompt: __t.string(),
   followUpChips: __t.array(__t.string()),
+  memberId: __t.u64(),
 };

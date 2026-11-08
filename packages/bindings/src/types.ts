@@ -27,6 +27,13 @@ export const AgentJob = __t.object("AgentJob", {
 });
 export type AgentJob = __Infer<typeof AgentJob>;
 
+export const AgentRequest = __t.object("AgentRequest", {
+  householdId: __t.u64(),
+  requestedAt: __t.timestamp(),
+  requestedBy: __t.u64(),
+});
+export type AgentRequest = __Infer<typeof AgentRequest>;
+
 export const Assumption = __t.object("Assumption", {
   householdId: __t.u64(),
   savingsRateBps: __t.i32(),

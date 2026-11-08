@@ -66,6 +66,7 @@ const SUBSCRIPTIONS = [
   'SELECT * FROM branch',
   'SELECT * FROM constraint',
   'SELECT * FROM agent_job',
+  'SELECT * FROM agent_request',
 ];
 
 const tiers = tiersFromEnv();
@@ -89,6 +90,8 @@ async function main(): Promise<void> {
   const { conn, identity } = await connect();
   log(`connected as ${identity.toHexString().slice(0, 12)}…`);
   await subscribe(conn);
+
+  honouredRequestAt = BigInt(Date.now() - REQUEST_WINDOW_MS) * 1000n;
 
   // Claim the agent role. Without the shared secret the module refuses, which
   // is what keeps "the agent proposes; humans decide" from being decorative.
@@ -140,22 +143,96 @@ async function main(): Promise<void> {
 /** The household this service is currently registered for. */
 let currentlyServing: { id: bigint; joinCode: string } | undefined;
 
-/** Register for the household we should be serving. */
+/**
+ * The newest `agent_request` we have already acted on, in micros.
+ *
+ * Tracked separately from `currentlyServing` because a re-tap has to count even
+ * when it names the household we are already on — that is how someone checks
+ * whether the button did anything.
+ *
+ * Seeded on connect to `now - REQUEST_WINDOW_MS` rather than to zero, so a
+ * request outranks `AGENT_JOIN_CODE` only while it is plausibly someone's live
+ * intent. Zero would mean a tap from last week quietly beats the join code on
+ * every boot forever — the pinned demo machine starting on the wrong household
+ * and nothing on screen to explain it. The window is wide enough that "tap the
+ * button, then restart the agent" still works, which is the order people
+ * actually do it in when the service has died.
+ */
+let honouredRequestAt = 0n;
+
+/** How recent a request has to be to outrank `AGENT_JOIN_CODE` at boot. */
+const REQUEST_WINDOW_MS = Number(process.env.AGENT_REQUEST_WINDOW_MS ?? 600_000);
+
+/**
+ * Register for the household we should be serving.
+ *
+ * Three rules, in order, and the order is the whole design:
+ *
+ *  1. **A request from the app wins.** Someone tapped "Bring the agent here"
+ *     while looking at the screen being ignored, which is better evidence than
+ *     anything configured at boot. This is the only rule allowed to move the
+ *     service *backwards*, to an older household id.
+ *  2. **`AGENT_JOIN_CODE` next**, for a pinned demo machine.
+ *  3. **Newest household otherwise**, which is right on a clean database.
+ *
+ * Rules 2 and 3 keep the original forward-only guard, so neither hops around a
+ * development database full of leftovers.
+ */
 async function register(conn: Conn): Promise<void> {
+  const request = newestRequest(conn);
+  if (request && request.requestedAt.microsSinceUnixEpoch > honouredRequestAt) {
+    // Mark it honoured even if we cannot act on it, or a request naming a
+    // household that has since been deleted is retried on every poll.
+    honouredRequestAt = request.requestedAt.microsSinceUnixEpoch;
+    const asked = [...conn.db.household.iter()].find(h => h.id === request.householdId);
+    if (asked) {
+      await claim(conn, asked, 'asked for by a partner');
+      return;
+    }
+    log(`a request named household ${request.householdId}, which no longer exists`);
+  }
+
   const target = JOIN_CODE
     ? [...conn.db.household.iter()].find(h => h.joinCode === JOIN_CODE)
     : householdToServe(conn);
 
   if (!target) {
-    if (!currentlyServing) log('no household to serve yet; waiting for one');
+    if (!currentlyServing) {
+      log(
+        JOIN_CODE
+          ? `no household with code ${JOIN_CODE} yet; waiting`
+          : 'no household to serve yet; waiting for one'
+      );
+    }
     return;
   }
   if (currentlyServing && target.id <= currentlyServing.id) return;
 
+  await claim(conn, target, JOIN_CODE ? `AGENT_JOIN_CODE=${JOIN_CODE}` : 'newest household');
+}
+
+/** The newest request across all households, or none. */
+function newestRequest(conn: Conn) {
+  return [...conn.db.agentRequest.iter()].sort((a, b) =>
+    a.requestedAt.microsSinceUnixEpoch < b.requestedAt.microsSinceUnixEpoch ? 1 : -1
+  )[0];
+}
+
+/** Take the agent role in one household, saying out loud why. */
+async function claim(
+  conn: Conn,
+  target: { id: bigint; joinCode: string },
+  why: string
+): Promise<void> {
+  if (currentlyServing?.id === target.id) {
+    log(`already serving household ${target.joinCode} (${why})`);
+    return;
+  }
   try {
     await conn.reducers.registerAgent({ joinCode: target.joinCode, secret: SECRET });
+    const from = currentlyServing ? ` (was ${currentlyServing.joinCode})` : '';
     currentlyServing = { id: target.id, joinCode: target.joinCode };
-    log(`serving household ${target.joinCode}`);
+    log(`serving household ${target.joinCode}${from} — ${why}`);
   } catch (error) {
     log('could not register:', error instanceof Error ? error.message : error);
   }
@@ -403,6 +480,10 @@ async function interpretEvent(
     })),
     followUpPrompt: first?.prompt ?? '',
     followUpChips: first?.chips ?? [],
+    // Who reported it, so the module can attribute the event and route that
+    // partner into the session it opens (Stage R, R1/R3). The module resolves
+    // this against its own member rows, so a missing id is safe.
+    memberId: BigInt(String(input.memberId ?? 0)),
   });
 
   await conn.reducers.completeJob({

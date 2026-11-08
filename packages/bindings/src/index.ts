@@ -68,6 +68,7 @@ import RegisterAgentReducer from "./register_agent_reducer.ts";
 import RejectItemReducer from "./reject_item_reducer.ts";
 import RemoveConstraintReducer from "./remove_constraint_reducer.ts";
 import RemoveGoalReducer from "./remove_goal_reducer.ts";
+import RequestAgentReducer from "./request_agent_reducer.ts";
 import RequestBranchNamingReducer from "./request_branch_naming_reducer.ts";
 import RequestBridgeReducer from "./request_bridge_reducer.ts";
 import RerollReducer from "./reroll_reducer.ts";
@@ -90,6 +91,7 @@ import TuneLeverReducer from "./tune_lever_reducer.ts";
 
 // Import all table schema definitions
 import AgentJobRow from "./agent_job_table.ts";
+import AgentRequestRow from "./agent_request_table.ts";
 import AssumptionRow from "./assumption_table.ts";
 import BaselineRow from "./baseline_table.ts";
 import BranchRow from "./branch_table.ts";
@@ -134,6 +136,17 @@ const tablesSchema = __schema({
       { name: 'agent_job_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, AgentJobRow),
+  agentRequest: __table({
+    name: 'agent_request',
+    indexes: [
+      { accessor: 'householdId', name: 'agent_request_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+    ],
+    constraints: [
+      { name: 'agent_request_household_id_key', constraint: 'unique', columns: ['householdId'] },
+    ],
+  }, AgentRequestRow),
   assumption: __table({
     name: 'assumption',
     indexes: [
@@ -475,6 +488,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reject_item", RejectItemReducer),
   __reducerSchema("remove_constraint", RemoveConstraintReducer),
   __reducerSchema("remove_goal", RemoveGoalReducer),
+  __reducerSchema("request_agent", RequestAgentReducer),
   __reducerSchema("request_branch_naming", RequestBranchNamingReducer),
   __reducerSchema("request_bridge", RequestBridgeReducer),
   __reducerSchema("reroll", RerollReducer),

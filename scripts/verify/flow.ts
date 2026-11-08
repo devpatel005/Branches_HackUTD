@@ -20,6 +20,7 @@ import type { Identity } from 'spacetimedb';
 import { FLEXIBLE_LABEL } from '@branches/engine';
 import { PRIVATE_MERCHANT_CANARIES, TEST_HOUSEHOLD_A_FUN_MONEY } from '@branches/mock-data';
 import { check, finish, printTable, type Check } from './table.ts';
+import { AGENT_SHARED_SECRET } from '../../server/spacetime/src/agent-secret.ts';
 
 const HOST = process.env.SPACETIME_HOST ?? 'ws://127.0.0.1:3000';
 const DB = process.env.SPACETIME_DB_NAME ?? 'branches';
@@ -40,6 +41,7 @@ const SUBSCRIPTIONS = [
   'SELECT * FROM impact',
   'SELECT * FROM chat_message',
   'SELECT * FROM session',
+  'SELECT * FROM session_member',
   'SELECT * FROM branch_candidate',
   'SELECT * FROM branch',
   'SELECT * FROM constraint',
@@ -683,6 +685,137 @@ checks.push(
 );
 
 // ======================================================================
+// 9b. Stage R — one sentence becomes three branches
+// ======================================================================
+// The chain used to stop twice, both times in the client: the impact came from
+// a `useEffect` on Chat and the session from a button on the impact card. These
+// checks are the reason that can never come back — each one asserts on state
+// that exists after a **single** reducer call, with no client in the loop.
+//
+// A third connection registers as the agent, because the interesting caller is
+// the agent: `applyEventInterpretation` is the entry point a typed sentence
+// actually arrives through.
+
+const agent = await connect('Agent');
+await subscribe(agent);
+await agent.conn.reducers.registerAgent({
+  joinCode: household.joinCode,
+  secret: AGENT_SHARED_SECRET,
+});
+await waitFor('the agent member row', () =>
+  rows.members(a).find(m => m.householdId === household.id && m.role === 'agent')
+);
+
+// Start from a clean table: earlier sections leave a session open.
+for (const open of mine.sessions(a).filter(x => x.status === 'open')) {
+  await a.conn.reducers.closeSession({ sessionId: open.id });
+}
+await waitFor('no session open', () =>
+  mine.sessions(a).filter(x => x.status === 'open').length === 0 ? true : undefined
+);
+
+// Deliberately placed here, before section 10 commits anything and before the
+// goals are touched: the E5 baby event is *known* to put Japan at risk against
+// this plan, so the chain has something real to open a session about. Run it
+// after the commit instead and every event reports `noImpact` — correctly, and
+// the whole section would pass vacuously. R2c2 below is the guard on that.
+
+// --- R-2: a complete interpretation runs the whole chain in one call ----
+await agent.conn.reducers.applyEventInterpretation({
+  templateId: 'baby',
+  params: [
+    { key: 'monthsUntilBirth', value: '9' },
+    { key: 'leaveMember', value: String(memberBId) },
+    { key: 'leaveMonths', value: '2' },
+    { key: 'care', value: 'daycare' },
+  ],
+  followUpPrompt: '',
+  followUpChips: [],
+  memberId: memberBId,
+});
+
+const chainEvent = await waitFor('the interpreted event', () =>
+  mine.events(a).find(e => e.templateId === 'baby' && e.status === 'active')
+);
+const chainSession = await waitFor('a session opened by the chain', () =>
+  mine.sessions(a).find(x => x.eventId === chainEvent.id && x.status === 'open')
+);
+scopedSessionId = chainSession.id;
+await waitFor('three branches from the chain', () =>
+  inSession.branches(a).length === 3 ? true : undefined
+);
+
+checks.push(
+  check('SR2a', 'a fully understood sentence needs no follow-up', chainEvent.status, 'active'),
+  check('SR2b', 'the event is attributed to the partner who said it, not the agent', chainEvent.createdBy, memberBId),
+  check('SR2c', 'the impact is computed without anyone looking at Chat', mine.impacts(a).some(i => i.eventId === chainEvent.id), true),
+  // Without this the rest of the section could pass vacuously: an event that
+  // changes nothing is *supposed* to open no session.
+  check('SR2c2', 'and the event genuinely bites, so the rest of this means something', (JSON.parse(mine.impacts(a).find(i => i.eventId === chainEvent.id)!.json) as { noImpact: boolean }).noImpact, false),
+  check('SR2d', 'the session opens by itself', chainSession.status, 'open'),
+  check('SR2e', "and it is the reporter's screen that follows it", chainSession.startedBy, memberBId),
+  check('SR2f', 'the reporter is already in the session, so their partner gets the banner', [...a.conn.db.sessionMember.iter()].find(x => x.sessionId === chainSession.id && x.memberId === memberBId)?.present, true),
+  check('SR2g', 'the agent is never enrolled as a session member', [...a.conn.db.sessionMember.iter()].filter(x => x.sessionId === chainSession.id).length, 1),
+  check('SR2h', 'three branches are on the table', inSession.branches(a).length, 3),
+  check('SR2i', 'and they reach the partner too', await waitFor('branches on B', () => (inSession.branches(b).length === 3 ? true : undefined)), true)
+);
+
+// --- R-3: follow-ups outstanding must not open anything ----------------
+await agent.conn.reducers.applyEventInterpretation({
+  templateId: 'baby',
+  params: [
+    { key: 'monthsUntilBirth', value: '9' },
+    { key: 'leaveMember', value: String(memberBId) },
+  ],
+  followUpPrompt: 'How many months of leave, and daycare or care at home?',
+  followUpChips: ['2 months', 'daycare'],
+  memberId: memberBId,
+});
+
+const draftEvent = await waitFor('the draft event', () =>
+  mine.events(a).find(e => e.templateId === 'baby' && e.status === 'draft')
+);
+const openAfterDraft = mine.sessions(a).filter(x => x.status === 'open');
+
+checks.push(
+  check('SR3a', 'an interpretation with follow-ups outstanding stays a draft', draftEvent.status, 'draft'),
+  check('SR3b', 'no session is opened from half-known parameters', openAfterDraft.some(x => x.eventId === draftEvent.id), false),
+  check('SR3c', 'and no impact is computed from them either', mine.impacts(a).some(i => i.eventId === draftEvent.id), false)
+);
+
+// One of the two asked parameters: still outstanding, so still nothing.
+await b.conn.reducers.answerEventParam({ eventId: draftEvent.id, key: 'care', value: 'daycare' });
+await waitFor('the answer to land', () =>
+  (JSON.parse(mine.events(a).find(e => e.id === draftEvent.id)!.params) as Record<string, unknown>)
+    .care === 'daycare'
+    ? true
+    : undefined
+);
+
+checks.push(
+  check('SR3d', 'answering one of two follow-ups leaves the event a draft', mine.events(a).find(e => e.id === draftEvent.id)?.status, 'draft'),
+  check('SR3e', 'and still opens nothing', mine.sessions(a).some(x => x.status === 'open' && x.eventId === draftEvent.id), false)
+);
+
+// The last one completes it — and that is what starts the match.
+await b.conn.reducers.answerEventParam({ eventId: draftEvent.id, key: 'leaveMonths', value: '2' });
+const draftSession = await waitFor('a session from the last follow-up', () =>
+  mine.sessions(a).find(x => x.eventId === draftEvent.id && x.status === 'open')
+);
+scopedSessionId = draftSession.id;
+await waitFor('three branches from the follow-up path', () =>
+  inSession.branches(a).length === 3 ? true : undefined
+);
+
+checks.push(
+  check('SR3f', 'answering the last follow-up promotes the event', mine.events(a).find(e => e.id === draftEvent.id)?.status, 'active'),
+  check('SR3g', 'and that is what opens the session', draftSession.status, 'open'),
+  check('SR3h', 'with three branches already on it', inSession.branches(a).length, 3),
+  check('SR3i', 'the superseded session was closed, so only one is open', mine.sessions(a).filter(x => x.status === 'open').length, 1),
+  check('SR3j', 'and the chain event was dismissed by the new one', mine.events(a).find(e => e.id === chainEvent.id)?.status, 'dismissed')
+);
+
+// ======================================================================
 // 10. Branches — Stage 5's Done-when
 // ======================================================================
 // Re-create the baby event: the previous section dismissed it.
@@ -1302,7 +1435,47 @@ checks.push(
   )
 );
 
+// ======================================================================
+// 12. Stage R — nothing to plan against must explain itself, not throw
+// ======================================================================
+// Deliberately last: it empties the household's goals.
+for (const goal of mine.goals(a)) {
+  await a.conn.reducers.removeGoal({ goalId: goal.id });
+}
+await waitFor('no goals left', () => (mine.goals(a).length === 0 ? true : undefined));
+for (const open of mine.sessions(a).filter(x => x.status === 'open')) {
+  await a.conn.reducers.closeSession({ sessionId: open.id });
+}
+
+const messagesBefore = mine.messages(a).length;
+let goallessThrew = false;
+try {
+  await a.conn.reducers.createEvent({
+    templateId: 'medical_bill',
+    params: [
+      { key: 'amount', value: '500' },
+      { key: 'month', value: '1' },
+    ],
+  });
+} catch {
+  goallessThrew = true;
+}
+const goallessEvent = await waitFor('the goalless event', () =>
+  mine.events(a).find(e => e.templateId === 'medical_bill' && e.status === 'active')
+);
+await waitFor('a message explaining why nothing happened', () =>
+  mine.messages(a).length > messagesBefore + 1 ? true : undefined
+);
+
+checks.push(
+  check('SR4a', 'an event with no goals to plan against is still recorded', goallessThrew, false),
+  check('SR4b', 'it opens no session, because there is nothing to choose between', mine.sessions(a).some(x => x.status === 'open'), false),
+  check('SR4c', 'and no impact is stored', mine.impacts(a).some(i => i.eventId === goallessEvent.id), false),
+  check('SR4d', 'the thread says why rather than leaving a dead end', mine.messages(a).slice(messagesBefore).some(m => m.kind === 'system' && m.refId === goallessEvent.id), true)
+);
+
 const ok = printTable('V4 Data flow — Stage 2 (household, inference, onboarding)', checks);
 a.conn.disconnect();
 b.conn.disconnect();
+agent.conn.disconnect();
 finish(ok);
