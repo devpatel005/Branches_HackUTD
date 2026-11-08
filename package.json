@@ -1,0 +1,33 @@
+{
+  "name": "branches",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Branches — a shared financial plan for couples (HackUTD 2026)",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "server/spacetime",
+    "services/*",
+    "scripts/verify"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "mobile": "npm run -w @branches/mobile start",
+    "mobile:web": "npm run -w @branches/mobile web",
+    "stdb:start": "spacetime start",
+    "stdb:build": "npm run -w @branches/spacetime build",
+    "stdb:publish:local": "npm run -w @branches/spacetime publish:local",
+    "stdb:publish": "npm run -w @branches/spacetime publish",
+    "stdb:bindings": "npm run -w @branches/spacetime bindings",
+    "agent": "npm run -w @branches/agent start",
+    "agent:smoke": "npm run -w @branches/agent smoke",
+    "verify": "npm run -w @branches/verify verify",
+    "verify:math": "npm run -w @branches/verify verify:math",
+    "verify:selftest": "npm run -w @branches/verify verify:selftest",
+    "typecheck": "npm run -w @branches/engine typecheck && npm run -w @branches/spacetime typecheck && npm run -w @branches/mobile typecheck",
+    "postinstall": "node scripts/link-module-tsc.mjs",
+    "verify:stdb": "npm run -w @branches/verify verify:stdb"
+  }
+}

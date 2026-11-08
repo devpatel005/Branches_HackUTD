@@ -12,7 +12,13 @@ Condensed from the team's research documents. Items marked **(verify)** have not
 - Anonymous identity: clients receive an identity and token on connect. Persist the token (AsyncStorage in React Native — **not** `localStorage`) to keep the same identity.
 - Maincloud free tier is sufficient (research cites ~2,500 TeV/month).
 - HackUTD track: the majority of business logic must live in SpacetimeDB; submissions need a public GitHub repo.
-- **(verify)** SDK and hooks run inside Expo Go; module can import `packages/engine`; whether per-client row filtering exists.
+- **Confirmed in Stage 0** (CLI + npm `spacetimedb` both 2.14.1):
+  - The module **can** import `packages/engine`. The engine is bundled into the WASM and runs inside reducers — verified by a reducer writing `F1(12000, 24)` into a column and reading back `500`.
+  - The client SDK and generated bindings drive a real connection **from Node** (two clients, cross-client subscription updates, token-preserved identity). The React hooks bundle cleanly for **web, iOS and Android**; running inside Expo Go on a physical device is still unconfirmed (needs a phone).
+  - **Per-client row filtering exists**, which resolves the warning in [[05 Data Model]]. Two mechanisms: `spacetimedb.clientVisibilityFilter.sql('SELECT * FROM t WHERE owner = :sender')`, and **per-user views** (`spacetimedb.view(...)` keyed on `ctx.sender`), where deleting a row the view depends on automatically drops the rows it exposed. Stage 2 should use these rather than relying on "all data is mock."
+  - Generated TypeScript bindings use extensionless imports by default, which bundlers resolve but Node ESM does not. Generate with `--import-extension ts` so the same bindings work in Metro *and* in Node-run verification scripts.
+  - `spacetime build` looks for `tsc` in the module's own `node_modules`; under npm workspaces it is hoisted, and the build then prints "tsc not found" and **silently skips typechecking**. A postinstall hook links it (`scripts/link-module-tsc.mjs`).
+- **Correction:** reducers still cannot make outbound HTTP calls, but **procedures and HTTP handlers can** (`ctx.http.fetch`). This does not change the design — the agent service stays a separate client, because validation, retries and failover belong outside the database — but it is no longer true that the module *cannot* reach the network.
 - **Note:** the research's sample `simulateYear` reducer never subtracted completed goal costs from savings. Don't reuse it; the yearly wrap (stretch) must follow [[06 Engine Spec]] semantics.
 
 ## Nemotron
@@ -22,7 +28,8 @@ Condensed from the team's research documents. Items marked **(verify)** have not
 - Quirks: with thinking on, `max_tokens` covers thinking + tool arguments and can exhaust the budget (empty response, `finish_reason: "length"`); disable thinking and use `max_tokens: 2048`. Don't set both `temperature` and `top_p`. Strict message alternation and tool-call id matching. 429 = rate limit, 402 = quota.
 - Research reports a low score (≈9.5%) for a Nemotron model on a banking-arithmetic benchmark — supports our no-AI-math rule.
 - NVIDIA track: Nemotron must be the primary decision-maker (other providers only as failover).
-- **(verify)** exact model name; that `chat_template_kwargs` sent at the top level of the Node SDK request disables thinking (the research sample used a Python-style `extra_body`).
+- **(verify) — still unconfirmed.** The exact model name and the thinking-off behaviour both need a live call, which needs `NVIDIA_API_KEY`. Stage 0 built the smoke check and ran it in **recorded mode** only (the team chose to defer the key), so these two remain the project's largest unverified risks. Run `npm run -w @branches/agent smoke:live` as soon as a key exists; checks S6 (no `reasoning_content`) and S7 (`finish_reason` is not `length`) are the ones that matter.
+- Stage 0's request builder puts `chat_template_kwargs` at the **top level** of the request body (correct for the Node SDK / raw `fetch`; `extra_body` is a Python-SDK convention) and deliberately omits `top_p`. See `services/agent/src/model-config.ts`.
 
 ## Photon
 - iMessage group chats are supported via `spectrum-ts` (outbound gRPC; no webhook URL needed). The bot can create groups (dedicated "money thread"). WhatsApp Business: 1-on-1 only. Telegram: bot can't create spaces.
@@ -33,6 +40,9 @@ Condensed from the team's research documents. Items marked **(verify)** have not
 
 ## Expo
 - Expo Go runs JavaScript-only libraries; no custom native modules.
+- **Confirmed in Stage 0:** current template is **Expo SDK 58** (React 19.3, React Native 0.88.1). The dependency set — `spacetimedb`, `spacetimedb/react`, `@react-native-async-storage/async-storage`, `expo-router` — is JS-only and bundles for web, iOS and Android with no native modules.
+- A monorepo needs an explicit `metro.config.js` (`watchFolders` to the repo root plus `nodeModulesPaths`), or Metro cannot resolve workspace packages at all.
+- Expo's `web.output` defaults to `"server"` in the template; Stage 0 set it to `"single"` so the web build is a static SPA that any free host can serve.
 - **(verify)** Push notifications are limited in recent Expo Go versions; use in-app banners.
 
 ## Users and market

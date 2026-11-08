@@ -1,0 +1,17 @@
+{
+  "name": "@branches/agent",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Node service: subscribes to SpacetimeDB agent_job rows, calls Nemotron, validates, writes results back.",
+  "type": "module",
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/index.ts",
+    "smoke": "node --disable-warning=ExperimentalWarning src/smoke.ts",
+    "smoke:live": "BRANCHES_AGENT_MODE=live node --disable-warning=ExperimentalWarning src/smoke.ts"
+  },
+  "dependencies": {
+    "openai": "^4.77.0",
+    "@branches/bindings": "*",
+    "spacetimedb": "2.14.*"
+  }
+}

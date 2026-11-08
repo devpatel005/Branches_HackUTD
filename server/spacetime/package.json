@@ -1,0 +1,21 @@
+{
+  "name": "@branches/spacetime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Branches SpacetimeDB module. Core logic lives here (02 Ground Rules #7).",
+  "type": "module",
+  "scripts": {
+    "build": "spacetime build --module-path .",
+    "publish:local": "spacetime publish --module-path . --server local branches",
+    "publish": "spacetime publish --module-path . --server maincloud branches",
+    "bindings": "spacetime generate --lang typescript --import-extension ts --module-path . --out-dir ../../packages/bindings/src",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@branches/engine": "*",
+    "spacetimedb": "2.14.*"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.2"
+  }
+}

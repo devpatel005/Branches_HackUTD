@@ -1,0 +1,35 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+/**
+ * Persists the SpacetimeDB identity token so a reload keeps the same identity
+ * (04 Architecture#Identity and households).
+ *
+ * AsyncStorage, not localStorage: localStorage does not exist in React Native,
+ * and AsyncStorage works on native *and* web (14 Research Notes#SpacetimeDB).
+ */
+const KEY = 'branches.spacetime.token';
+
+export async function loadToken(): Promise<string | undefined> {
+  try {
+    return (await AsyncStorage.getItem(KEY)) ?? undefined;
+  } catch {
+    // A broken store must not block the app from connecting fresh.
+    return undefined;
+  }
+}
+
+export async function saveToken(token: string): Promise<void> {
+  try {
+    await AsyncStorage.setItem(KEY, token);
+  } catch {
+    // Non-fatal: the identity just won't survive a reload.
+  }
+}
+
+export async function clearToken(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(KEY);
+  } catch {
+    /* non-fatal */
+  }
+}

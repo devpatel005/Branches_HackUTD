@@ -1,0 +1,27 @@
+{
+  "_comment": "Recorded-mode fixture. Mirrors the NVIDIA OpenAI-compatible wire shape. Replace with a real captured response once NVIDIA_API_KEY is set (npm run agent:smoke:live -- --record).",
+  "_recorded": false,
+  "id": "chatcmpl-mock-0001",
+  "model": "nvidia/nemotron-3.5-bolt-e4b",
+  "choices": [
+    {
+      "index": 0,
+      "finish_reason": "tool_calls",
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_mock_0001",
+            "type": "function",
+            "function": {
+              "name": "classify_life_event",
+              "arguments": "{\"templateId\":\"baby\",\"params\":{},\"followUps\":[{\"param\":\"leaveMonths\",\"prompt\":\"Is either of you taking unpaid leave?\",\"chips\":[\"No leave\",\"4 weeks unpaid\",\"8 weeks unpaid\",\"12 weeks unpaid\"]},{\"param\":\"care\",\"prompt\":\"Daycare, or one of you staying home?\",\"chips\":[\"Daycare\",\"Staying home\"]}]}"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 }
+}

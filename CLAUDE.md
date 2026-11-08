@@ -54,6 +54,7 @@ branches/
   server/spacetime/     SpacetimeDB TypeScript module
   services/agent/       Node service: subscribes to SpacetimeDB, calls Nemotron
   packages/engine/      pure TypeScript math, simulation, levers, branches
+  packages/bindings/    generated SpacetimeDB client bindings (app + agent + verify)
   packages/mock-data/   deterministic mock households and transactions
   scripts/verify/       verification scripts (see [[12 Verification]])
 ```
@@ -64,4 +65,57 @@ branches/
 
 ## Commands
 
-*Fill this in during Stage 0 and keep it current: install, run the app (phone and web), publish the SpacetimeDB module, run the agent service, run each verification script, reseed demo data.*
+All commands run from the repo root. `npm install` runs a postinstall hook that
+links the root TypeScript into `server/spacetime` — without it `spacetime build`
+silently skips typechecking the module.
+
+### Setup (once)
+```bash
+npm install                       # all workspaces
+curl -sSf https://install.spacetimedb.com | sh   # SpacetimeDB CLI
+export PATH="$HOME/.local/bin:$PATH"             # add to your shell profile
+cp .env.example .env
+cp apps/mobile/.env.example apps/mobile/.env
+cp services/agent/.env.example services/agent/.env   # add NVIDIA_API_KEY
+```
+
+### SpacetimeDB module
+```bash
+npm run stdb:start            # local server on 127.0.0.1:3000 (own terminal)
+npm run stdb:build            # build + typecheck the module
+npm run stdb:publish:local    # publish to the local server
+npm run stdb:publish          # publish to Maincloud (needs `spacetime login`)
+npm run stdb:bindings         # regenerate packages/bindings from the module
+```
+Regenerate bindings after **every** schema or reducer change, or clients
+silently use a stale schema.
+
+### App (phone and web)
+```bash
+npm run mobile                # Expo dev server; scan the QR with Expo Go
+npm run mobile:web            # Expo web in a browser
+npm run -w @branches/mobile start:tunnel   # phone not on the same Wi-Fi
+npm run -w @branches/mobile export:web     # static web build
+```
+On a physical phone, `127.0.0.1` is the phone itself. Set
+`EXPO_PUBLIC_SPACETIME_HOST` to your laptop's LAN IP, or publish to Maincloud.
+
+### Agent service
+```bash
+npm run agent:smoke                        # recorded mode, no network
+npm run -w @branches/agent smoke:live      # real Nemotron call (needs NVIDIA_API_KEY)
+npm run agent                              # the service (Stage 6)
+```
+
+### Verification ([[12 Verification]])
+```bash
+npm run verify              # every suite, aggregated; non-zero on any failure
+npm run verify:math         # V1 Math
+npm run verify:stdb         # Stage 0 data path (needs a published module)
+npm run verify:selftest     # proves the harness reports failures (exits 1 by design)
+npm run typecheck           # engine + module + app
+```
+Suites needing a server print SKIP rather than failing when none is reachable.
+
+### Demo data
+*Added in Stage 2 (`seedMockData` / reseed).*

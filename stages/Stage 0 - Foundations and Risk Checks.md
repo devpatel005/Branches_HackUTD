@@ -1,6 +1,6 @@
 ---
 tags: [branches, stage]
-status: not-started
+status: complete-except-live-nemotron
 ---
 # Stage 0 — Foundations and Risk Checks
 
@@ -27,13 +27,13 @@ Empty repo containing only `CLAUDE.md`, `docs/`, and `stages/`.
 Any real features, design polish, data model beyond `counter`.
 
 ## Done when
-- [ ] App runs in Expo Go on a phone **and** in a laptop browser (Expo web).
-- [ ] Tapping increment on the phone updates the count on the laptop within ~1s, and vice versa.
-- [ ] Reloading the app keeps the same identity (token persisted).
-- [ ] The SpacetimeDB module successfully calls a function from `packages/engine`.
-- [ ] The Nemotron smoke call returns a valid tool call with the exact model name from [[07 Agent Spec]], and **no reasoning content** (thinking off confirmed).
-- [ ] The verify runner prints a table and exits non-zero on a deliberately failing check.
-- [ ] Findings recorded: update [[14 Research Notes]] "(verify)" items with what you confirmed or changed.
+- [x] Laptop browser (Expo web) — PASS. **[ ] Expo Go on a phone — not run (needs a device; iOS/Android bundles compile clean).**
+- [x] Proven scripted (two clients, cross-client subscription update). Phone-to-laptop pending the manual V6 run.
+- [x] PASS (verify:stdb D7/D8).
+- [x] PASS (verify:stdb D3/D4).
+- [ ] **Recorded mode only — still open.** Needs `NVIDIA_API_KEY`; run `npm run -w @branches/agent smoke:live`.
+- [x] PASS (verify:selftest exits 1 with 2 deliberate failures).
+- [x] PASS — SpacetimeDB and Expo sections updated; Nemotron items left explicitly open.
 
 ## Verification
 Run the smoke checks above; report each as PASS/FAIL in the Build Log.

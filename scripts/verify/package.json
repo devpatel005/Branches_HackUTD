@@ -1,0 +1,18 @@
+{
+  "name": "@branches/verify",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Verification scripts. Each prints ID/description/expected/actual/PASS-FAIL and exits non-zero on any FAIL (12 Verification).",
+  "type": "module",
+  "scripts": {
+    "verify": "node --disable-warning=ExperimentalWarning run-all.ts",
+    "verify:math": "node --disable-warning=ExperimentalWarning math.ts",
+    "verify:selftest": "node --disable-warning=ExperimentalWarning selftest.ts",
+    "verify:stdb": "node --disable-warning=ExperimentalWarning stdb.ts"
+  },
+  "dependencies": {
+    "@branches/engine": "*",
+    "@branches/bindings": "*",
+    "spacetimedb": "2.14.*"
+  }
+}
