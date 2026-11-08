@@ -10,7 +10,7 @@ import {
   type NativeSyntheticEvent,
   type ScrollViewInstance,
 } from 'react-native';
-import Svg, { G, Path } from 'react-native-svg';
+import Svg, { Circle, G, Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from './components';
 import { FernLeafPaths } from './forest';
@@ -352,6 +352,9 @@ function TreeClimb({
   // would otherwise leave the view stranded somewhere else.
   const mountedAt = useRef(Date.now());
   const viewport = useRef(0);
+  // Background forest: how far up the climb we are (0 = base, 1 = top).
+  const [frame, setFrame] = useState({ w: 0, h: 0 });
+  const [climbP, setClimbP] = useState(0);
   const segments = useRef(new Map<number, { y: number; h: number }>());
   const treeTop = useRef(0);
   const [width, setWidth] = useState(0);
@@ -381,6 +384,8 @@ function TreeClimb({
   // Which year is in the middle of the screen, for the floating marker.
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, layoutMeasurement, contentSize } = e.nativeEvent;
+    const range = Math.max(1, contentSize.height - layoutMeasurement.height);
+    setClimbP(1 - Math.max(0, Math.min(1, contentOffset.y / range)));
     const y = contentOffset.y + layoutMeasurement.height / 2;
     let found = inView;
     let top = Infinity;
@@ -417,7 +422,14 @@ function TreeClimb({
   const edge = (width - midWidth) / 2;
 
   return (
-    <View style={styles.root} onLayout={e => (viewport.current = e.nativeEvent.layout.height)}>
+    <View
+      style={styles.root}
+      onLayout={e => {
+        viewport.current = e.nativeEvent.layout.height;
+        setFrame({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
+      }}
+    >
+      {frame.w > 0 ? <ClimbBackdrop width={frame.w} height={frame.h} progress={climbP} /> : null}
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
@@ -535,6 +547,74 @@ function TreeClimb({
           <Text style={styles.climbText}>Swipe up to climb</Text>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/**
+ * The forest behind the climb, in the same flat layers as Home: a far and a
+ * near row of spruces with a band of mist between them. It stays put while
+ * the trunk scrolls, and sinks as you climb (the near row faster than the far
+ * one, for depth): at the base you are among the trunks, halfway up the
+ * spruce tops drift past, and at the top you are above the treeline with a
+ * small moon. Decorative only.
+ */
+function ClimbBackdrop({ width: W, height: H, progress }: { width: number; height: number; progress: number }) {
+  const rows = useMemo(() => {
+    const row = (count: number, minH: number, maxH: number, seed: number) => {
+      const r = seeded(seed);
+      const trees: { x: number; h: number; w: number }[] = [];
+      let x = -20;
+      while (x < W + 40) {
+        const h = minH + r() * (maxH - minH);
+        trees.push({ x, h, w: h * (0.34 + r() * 0.1) });
+        x += (W / count) * (0.7 + r() * 0.6);
+      }
+      return trees;
+    };
+    return {
+      far: row(6, H * 0.55, H * 0.85, 31),
+      near: row(4, H * 0.6, H * 0.95, 47),
+    };
+  }, [W, H]);
+
+  // A tall spruce standing on `base`: tiered, notched sides like Home's forest.
+  const spruceAt = (x: number, base: number, h: number, w: number) => {
+    const tiers = 4;
+    let d = `M${f(x)},${f(base - h)}`;
+    for (let k = 1; k <= tiers; k++) {
+      const y = base - h + (h * k) / tiers;
+      const half = (w / 2) * (0.35 + 0.65 * (k / tiers));
+      d += ` L${f(x + half)},${f(y)} L${f(x + half * 0.45)},${f(y - 2)}`;
+    }
+    d += ` L${f(x + w * 0.06)},${f(base)} L${f(x - w * 0.06)},${f(base)}`;
+    for (let k = tiers; k >= 1; k--) {
+      const y = base - h + (h * k) / tiers;
+      const half = (w / 2) * (0.35 + 0.65 * (k / tiers));
+      d += ` L${f(x - half * 0.45)},${f(y - 2)} L${f(x - half)},${f(y)}`;
+    }
+    return d + ' Z';
+  };
+
+  // Ground sits at the bottom of the screen at the base and sinks as you climb.
+  const farBase = H + progress * H * 0.7;
+  const nearBase = H + progress * H * 1.15;
+  const mistY = H * 0.62 + progress * H * 0.55;
+  const moon = Math.max(0, Math.min(1, (progress - 0.7) / 0.25));
+
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill} aria-hidden>
+      <Svg width={W} height={H}>
+        {moon > 0 ? (
+          <G opacity={moon}>
+            <Circle cx={W * 0.86} cy={H * 0.52} r={9} fill={colors.moon} opacity={0.9} />
+            <Circle cx={W * 0.86} cy={H * 0.52} r={16} stroke={colors.accent} strokeWidth={line.hair} fill="none" opacity={0.2} />
+          </G>
+        ) : null}
+        <Path d={rows.far.map(t => spruceAt(t.x, farBase, t.h, t.w)).join(' ')} fill={colors.treeFar} />
+        <Path d={`M0,${f(mistY)} L${f(W)},${f(mistY)} L${f(W)},${f(mistY + 18)} L0,${f(mistY + 18)} Z`} fill={colors.band} opacity={0.5} />
+        <Path d={rows.near.map(t => spruceAt(t.x, nearBase, t.h, t.w)).join(' ')} fill={colors.treeMid} />
+      </Svg>
     </View>
   );
 }
