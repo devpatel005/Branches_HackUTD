@@ -167,7 +167,7 @@ export default function SessionScreen() {
     return (
       <Screen>
         <TitleBand plate="Planning session · Done" title="This is your plan now.">
-          <BranchPaths lanes={[{ color: colors.accent, chosen: true }]} merged height={40} />
+          <BranchPaths lanes={[{ color: colors.accent, chosen: true }]} merged height={90} />
         </TitleBand>
         {chosen ? (
           <>
@@ -341,7 +341,7 @@ export default function SessionScreen() {
         </View>
       ) : (
         <>
-          <BranchPaths lanes={lanes} />
+          <BranchPaths lanes={lanes} wilt />
           <View style={wide ? styles.cardsWide : undefined}>
             {branches.map(branch => (
           <BranchCard

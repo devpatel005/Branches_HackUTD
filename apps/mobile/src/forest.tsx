@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { StyleSheet, View, type LayoutChangeEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Circle, G, Path, Rect } from 'react-native-svg';
+import { BARK, BarkBranch, Flower, Twig, cubic, useGrowth } from './branch-art';
 import { colors, line } from './theme';
 
 /**
@@ -251,83 +252,112 @@ export function FernLeaf({
 }
 
 // ---------------------------------------------------------------------------
-// BranchPaths — the signature. One path comes in, forks into lanes with
-// transit-map bends (radius = line.bend), each lane ending at a station ring.
+// BranchPaths — the signature. The plan comes in as one bark branch, swells
+// into a knot where life changed, and forks into one branch per path, each
+// ending in a flower. A branch picked by a partner carries a thin line in
+// their colour. Branches grow out from the knot when the paths appear, and a
+// branch regrows when someone picks it (useGrowth; off under reduce-motion).
 // ---------------------------------------------------------------------------
 
 export type Lane = {
-  /** Lane colour: a member's colour when they picked it, accent when both did. */
+  /** A member's colour when they picked it, accent when both did, otherwise unpicked. */
   color: string;
-  /** Draw the station filled (the chosen lane). */
+  /** Someone has picked this path. */
   chosen?: boolean;
 };
 
 export function BranchPaths({
   lanes,
-  height = 76,
-  trunkColor = colors.accent,
+  height = 120,
   merged = false,
+  wilt = false,
 }: {
   lanes: readonly Lane[];
   height?: number;
   trunkColor?: string;
-  /** After commit: every lane folds back into one path. */
+  /** After commit: one branch carries on alone. */
   merged?: boolean;
+  /** Also draw the "no change" path: a dead twig ending in a wilted flower. */
+  wilt?: boolean;
 }) {
   const [width, setWidth] = useState(0);
   const n = Math.max(1, lanes.length);
-  const r = line.bend;
-  const yMid = height / 2;
-  const spread = Math.min((height - 16) / Math.max(1, n - 1), 26);
-  const forkX = Math.min(96, width * 0.22);
-  const endX = width - 10;
+  const tokens = lanes.map(l => `${l.chosen ? 'c' : 'u'}:${l.color}`);
+  const grow = useGrowth(merged ? ['merged'] : tokens);
 
-  const laneY = (i: number) => (merged ? yMid : yMid + (i - (n - 1) / 2) * spread);
+  const H = height;
+  const trunkY = H * 0.72;
+  const forkX = Math.min(110, width * 0.3);
+  const endX = width - 16;
+  const top = Math.min(22, H * 0.2);
+  const bottom = H * 0.82;
+  // Lanes fan out from high (first) to low (last), like branches rising.
+  const laneY = (i: number) =>
+    merged || n === 1 ? top + (bottom - top) * 0.35 : top + ((bottom - top) * 0.75 * i) / Math.max(1, n - 1);
 
-  const path = (y: number) => {
-    if (Math.abs(y - yMid) < 0.5) return `M${f(forkX - r)},${f(yMid)} H${f(endX)}`;
-    const dir = y > yMid ? 1 : -1;
-    return [
-      `M${f(forkX - r)},${f(yMid)}`,
-      `H${f(forkX - r)}`,
-      `Q${f(forkX)},${f(yMid)} ${f(forkX)},${f(yMid + dir * r)}`,
-      `V${f(y - dir * r)}`,
-      `Q${f(forkX)},${f(y)} ${f(forkX + r)},${f(y)}`,
-      `H${f(endX)}`,
-    ].join(' ');
-  };
+  const trunk: Pt[] = [
+    [0, trunkY + 10],
+    [forkX * 0.5, trunkY + 4],
+    [forkX - 4, trunkY - 2],
+  ];
 
   return (
     <View
-      style={{ height }}
+      style={{ height: H }}
       onLayout={e => setWidth(Math.round(e.nativeEvent.layout.width))}
       aria-hidden
     >
       {width > 0 ? (
-        <Svg width={width} height={height}>
-          {lanes.map((lane, i) => (
-            <G key={i}>
+        <Svg width={width} height={H}>
+          {/* The "no change" path: a dead twig, dotted, ending in a wilted flower. */}
+          {wilt && !merged ? (
+            <G>
               <Path
-                d={path(laneY(i))}
-                stroke={lane.color}
-                strokeWidth={lane.chosen ? line.plan : line.path}
+                d={`M${forkX},${trunkY} C${forkX + 50},${trunkY + 6} ${forkX + 110},${H - 12} ${Math.min(endX - 30, forkX + 160)},${H - 8}`}
+                stroke={BARK.dark}
+                strokeWidth={1.4}
+                strokeDasharray="2 3"
                 fill="none"
                 strokeLinecap="round"
-                strokeLinejoin="round"
-                opacity={lane.chosen ? 1 : 0.75}
               />
-              <Circle
-                cx={endX}
-                cy={laneY(i)}
-                r={5}
-                fill={lane.chosen ? lane.color : colors.bg}
-                stroke={lane.color}
-                strokeWidth={line.path}
-              />
+              <Flower x={Math.min(endX - 30, forkX + 160)} y={H - 18} size={0.7} wilted />
             </G>
-          ))}
-          {/* The shared trunk, drawn last so no single lane's colour claims it. */}
-          <Path d={`M0,${f(yMid)} H${f(forkX - r + 1)}`} stroke={trunkColor} strokeWidth={line.plan} fill="none" />
+          ) : null}
+
+          {(merged ? [{ color: colors.accent, chosen: true }] : lanes).map((lane, i) => {
+            const p = Math.max(0, Math.min(1, grow[i] ?? 1));
+            const ly = laneY(i);
+            const full = cubic(
+              [forkX - 2, trunkY - 2],
+              [forkX + (endX - forkX) * 0.3, trunkY - 4],
+              [forkX + (endX - forkX) * 0.55, ly],
+              [endX, ly],
+              28
+            );
+            const shown = full.slice(0, Math.max(2, Math.round(p * (full.length - 1)) + 1));
+            const tip = shown[shown.length - 1]!;
+            const twigAt = full[Math.round(full.length * 0.62)]!;
+            const topLine = lane.chosen ? lane.color : undefined;
+            return (
+              <G key={i}>
+                {p > 0.7 ? <Twig x={twigAt[0]} y={twigAt[1] - 1} dir={i % 2 === 0 ? 1 : -1} size={0.75} /> : null}
+                <BarkBranch
+                  spine={shown}
+                  w0={4.6}
+                  w1={4.6 - 2.6 * p}
+                  fill={i % 2 === 1 ? BARK.dark : BARK.mid}
+                  topLine={topLine}
+                />
+                <Flower x={tip[0]} y={tip[1] - 1} size={0.8} open={Math.max(0, (p - 0.75) / 0.25)} />
+              </G>
+            );
+          })}
+
+          {/* The trunk and the knot where the plan forked. */}
+          <BarkBranch spine={trunk} w0={6} w1={5} />
+          <Path d={`M${forkX - 7},${trunkY - 2} a7,6 0 1 0 14,0 a7,6 0 1 0 -14,0`} fill={BARK.knot} />
+          <Path d={`M${forkX - 4},${trunkY - 2} a4,3 0 1 0 8,0 a4,3 0 1 0 -8,0`} fill={BARK.mid} />
+          <Circle cx={forkX} cy={trunkY - 2} r={9.5} fill="none" stroke={colors.accent} strokeWidth={line.hair} opacity={0.8} />
         </Svg>
       ) : null}
     </View>

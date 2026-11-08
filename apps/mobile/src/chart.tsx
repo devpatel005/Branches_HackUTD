@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { PanResponder, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, G, Line, Path, Rect, Text as SvgText } from 'react-native-svg';
+import { BarkBranch, Flower, Leaf, Twig, BARK, type Pt } from './branch-art';
 import { colors, fonts, line, space, type as typeScale } from './theme';
 
 /**
@@ -68,7 +69,9 @@ export function ProjectionChart({
       .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(p.value).toFixed(1)}`)
       .join(' ');
     const monthToIndex = new Map(points.map((p, i) => [p.month, i]));
-    return { path, x, y, xOfMonth, monthToIndex };
+    // The plan as a branch: a spine through the points, tapering to the end.
+    const spine: Pt[] = points.map((p, i) => [x(i), y(p.value)]);
+    return { path, x, y, xOfMonth, monthToIndex, spine };
   }, [points, width]);
 
   const panResponder = useMemo(
@@ -158,15 +161,29 @@ export function ProjectionChart({
               strokeWidth={line.hair}
             />
 
-            {/* The plan. */}
-            <Path
-              d={geometry.path}
-              stroke={lineColor}
-              strokeWidth={line.plan}
-              fill="none"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
+            {/* The plan, drawn as a branch: bark, a few twigs, knots and leaves.
+                Twigs sit at fixed points along it, skipping any near a goal. */}
+            {[0.18, 0.5, 0.8].map((at, k) => {
+              const sp = geometry.spine;
+              const i = Math.round(at * (sp.length - 1));
+              const p = sp[i];
+              if (!p) return null;
+              const nearGoal = markers.some(m => {
+                const mi = geometry.monthToIndex.get(m.month);
+                return mi !== undefined && Math.abs(geometry.x(mi) - p[0]) < 36;
+              });
+              if (nearGoal) return null;
+              return <Twig key={`t${k}`} x={p[0]} y={p[1] - 2} dir={k % 2 === 0 ? 1 : -1} size={0.9} />;
+            })}
+            <BarkBranch spine={geometry.spine} w0={5.5} w1={2.2} />
+            {[0.3, 0.64].map(at => {
+              const p = geometry.spine[Math.round(at * (geometry.spine.length - 1))];
+              return p ? <Path key={`k${at}`} d={`M${p[0] - 3},${p[1]} a3,2 0 1 0 6,0 a3,2 0 1 0 -6,0`} fill={BARK.knot} /> : null;
+            })}
+            {[0.38, 0.9].map((at, k) => {
+              const p = geometry.spine[Math.round(at * (geometry.spine.length - 1))];
+              return p ? <Leaf key={`l${at}`} x={p[0]} y={p[1] + 2} angle={k ? 50 : 120} scale={0.6} /> : null;
+            })}
 
             {/* Goals as stations on the line. */}
             {markers.map((marker, i) => {
@@ -198,14 +215,8 @@ export function ProjectionChart({
               }
               return (
                 <G key={`${marker.month}-${marker.label}`}>
-                  <Circle
-                    cx={cx}
-                    cy={cy}
-                    r={5}
-                    fill={colors.bg}
-                    stroke={marker.atRisk ? colors.error : colors.ink}
-                    strokeWidth={line.path}
-                  />
+                  {/* A goal blooms on the branch; one that doesn't fit is wilted. */}
+                  <Flower x={cx} y={cy - 2} size={1.1} wilted={marker.atRisk} />
                   <SvgText
                     x={anchor === 'start' ? cx + 8 : cx - 8}
                     y={ty}
