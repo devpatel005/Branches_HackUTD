@@ -53,23 +53,24 @@ export type TreeGoal = {
 // cream 7.0:1, tan 5.6:1, seafoam 5.4:1, lichen 4.9:1 (all AA).
 const BARK = {
   mid: '#6E4632',
-  light: '#8C5B3E', // the sunlit side, a flat band
-  shadow: '#563626', // the shaded side
-  crack: '#2E1C13',
-  outline: '#1E120C',
+  light: '#7A4F38', // the sunlit side, a flat band (kept close to the bark)
+  shadow: '#5E3B2A', // the shaded side
+  crack: '#3E281C',
+  outline: '#3E281C',
   ink: '#F6ECE0',
   meta: '#E8D3BF',
   moss: '#5F7436',
   mossDark: '#45572A',
-  foliage: '#2C4A34',
-  foliageDark: '#1C3324',
-  foliageLight: '#3D6145',
+  // Boughs use the same flat night greens as the forest in the background.
+  foliage: '#1D3936',
+  foliageDark: '#152C2A',
+  foliageLight: '#24443F',
 };
 
 const PLAN_YEARS = 10;
-const YEAR_MIN_HEIGHT = 340; // a long climb: about 3,500px of trunk
-const TOP_RATIO = 0.7; // trunk width near the canopy, as a share of the column
-const BOTTOM_RATIO = 0.8; // and just above the flare
+const YEAR_MIN_HEIGHT = 240; // the year-by-year climb: about 2,500px of trunk
+const TOP_RATIO = 0.28; // trunk width near the canopy, as a share of the column
+const BOTTOM_RATIO = 0.34; // and just above the flare
 
 function seeded(seed: number) {
   let s = seed >>> 0;
@@ -80,16 +81,7 @@ function seeded(seed: number) {
 }
 const f = (n: number) => n.toFixed(1);
 
-export function TreeTimeline({
-  goals,
-  tightYears,
-  yearLabel,
-  startLabel,
-  endLabel,
-  onOpenGoal,
-  onAddGoal,
-  footer,
-}: {
+type TreeProps = {
   goals: readonly TreeGoal[];
   tightYears: readonly number[];
   /** "2027–28" for plan year 2. */
@@ -101,13 +93,231 @@ export function TreeTimeline({
   onOpenGoal: (key: string) => void;
   onAddGoal: () => void;
   footer?: ReactNode;
+};
+
+/**
+ * Two ways to see the same tree. It opens zoomed out, with the whole tree on
+ * one screen; tapping a year (or "Climb year by year") zooms into the bark at
+ * that year, and "Whole tree" zooms back out.
+ */
+export function TreeTimeline(props: TreeProps) {
+  const [climbFrom, setClimbFrom] = useState<number | null>(null);
+  if (climbFrom === null) return <TreeOverview {...props} onClimb={setClimbFrom} />;
+  return <TreeClimb {...props} initialYear={climbFrom} onZoomOut={() => setClimbFrom(null)} />;
+}
+
+function groupGoals(goals: readonly TreeGoal[]) {
+  // Goals by plan year; within a year the later goal sits higher up the trunk.
+  const byYear = new Map<number, TreeGoal[]>();
+  for (const g of goals) {
+    const year = Math.min(PLAN_YEARS, Math.max(1, Math.floor((g.targetMonth - 1) / 12) + 1));
+    byYear.set(year, [...(byYear.get(year) ?? []), g]);
+  }
+  for (const list of byYear.values()) list.sort((a, b) => b.targetMonth - a.targetMonth);
+  // Twigs alternate sides up the whole tree, counting from the base.
+  const side = new Map<string, 'left' | 'right'>();
+  let n = 0;
+  for (let y = 1; y <= PLAN_YEARS; y++) {
+    for (const g of [...(byYear.get(y) ?? [])].reverse()) side.set(g.key, n++ % 2 === 0 ? 'right' : 'left');
+  }
+  return { byYear, side };
+}
+
+// ---------------------------------------------------------------------------
+// Zoomed out: the whole tree on one screen, one tappable band per year.
+// ---------------------------------------------------------------------------
+
+function TreeOverview({
+  goals,
+  tightYears,
+  yearLabel,
+  startLabel,
+  endLabel,
+  onAddGoal,
+  onClimb,
+}: TreeProps & { onClimb: (year: number) => void }) {
+  const insets = useSafeAreaInsets();
+  const [area, setArea] = useState({ w: 0, h: 0 });
+  const tight = new Set(tightYears);
+  const funded = goals.filter(g => g.funded).length;
+
+  return (
+    <View style={styles.root}>
+      <View style={[styles.overviewHead, { paddingTop: insets.top + space.lg }]}>
+        <Text style={styles.plate}>No. 2 · Timeline · Your ten years</Text>
+        <Text style={styles.overviewTitle} accessibilityRole="header">
+          {startLabel} to {endLabel}
+        </Text>
+        <Text style={styles.overviewSummary}>
+          {goals.length === 0
+            ? 'No goals yet. Tap a year to climb in, or add a goal.'
+            : `${funded} of ${goals.length} ${goals.length === 1 ? 'goal' : 'goals'} funded. Tap a year to climb in and see its goals.`}
+        </Text>
+      </View>
+
+      {/* The tree takes whatever height is left, so the whole of it fits. */}
+      <View
+        style={styles.overviewArea}
+        onLayout={e =>
+          setArea({ w: Math.min(e.nativeEvent.layout.width, COLUMN_MAX_WIDTH), h: e.nativeEvent.layout.height })
+        }
+      >
+        {area.w > 0 && area.h > 0 ? (
+          <Spruce width={area.w} height={area.h} tight={tight} yearLabel={yearLabel} onClimb={onClimb} />
+        ) : null}
+      </View>
+
+      <View style={styles.overviewActions}>
+        <View style={{ flex: 1 }}>
+          <Button label="Year by year" icon="up" onPress={() => onClimb(1)} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Button label="Add a goal" variant="secondary" icon="plus" onPress={onAddGoal} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * The whole plan as one spruce, in the same notched-tier style as the forest
+ * in the background: a thin bark trunk, one tier of boughs per plan year
+ * (widest at Year 1, narrowing to the leader at Year 10), and roots at the
+ * base. Tight years are moss-coloured tiers. Each year's label sits in the
+ * gutter on the left and the whole band is tappable.
+ */
+function Spruce({
+  width: W,
+  height: H,
+  tight,
+  yearLabel,
+  onClimb,
+}: {
+  width: number;
+  height: number;
+  tight: Set<number>;
+  yearLabel: (year: number) => string;
+  onClimb: (year: number) => void;
 }) {
+  const TOP = 34;
+  const BASE = 46;
+  const GUTTER = 112;
+  const rowH = (H - TOP - BASE) / PLAN_YEARS;
+  const cx = Math.max(GUTTER + 60, W * 0.6);
+  const maxHalf = Math.max(40, Math.min(W - cx - 10, cx - GUTTER - 6));
+  const minHalf = maxHalf * 0.3;
+  const rowTop = (year: number) => TOP + (PLAN_YEARS - year) * rowH;
+  const half = (year: number) => minHalf + (maxHalf - minHalf) * ((PLAN_YEARS - year) / (PLAN_YEARS - 1));
+  const trunkBottom = H - BASE;
+  const trunkTopW = 6;
+  const trunkBotW = 18;
+
+  const tier = (year: number) => {
+    const top = rowTop(year);
+    const apex = year === PLAN_YEARS ? TOP - 6 : top + rowH * 0.18;
+    const hem = top + rowH * 1.1;
+    const h = half(year);
+    const drop = hem - apex;
+    // Notched sides like the background spruces, and a ragged hem.
+    let d = `M${f(cx)},${f(apex)}`;
+    d += ` L${f(cx + h * 0.42)},${f(apex + drop * 0.55)} L${f(cx + h * 0.3)},${f(apex + drop * 0.52)}`;
+    d += ` L${f(cx + h)},${f(hem)}`;
+    const teeth = 5;
+    for (let k = 1; k <= teeth; k++) {
+      const x = cx + h - (2 * h * k) / teeth;
+      d += ` L${f(x + h / teeth)},${f(hem - 2.5)} L${f(x)},${f(hem)}`;
+    }
+    d += ` L${f(cx - h * 0.3)},${f(apex + drop * 0.52)} L${f(cx - h * 0.42)},${f(apex + drop * 0.55)} Z`;
+    return d;
+  };
+
+  const trunk = `M${f(cx - trunkTopW / 2)},${f(TOP)} L${f(cx + trunkTopW / 2)},${f(TOP)} L${f(cx + trunkBotW / 2)},${f(trunkBottom)} L${f(cx - trunkBotW / 2)},${f(trunkBottom)} Z`;
+
+  return (
+    <View style={{ width: W, height: H, alignSelf: 'center' }}>
+      <Svg width={W} height={H} style={StyleSheet.absoluteFill}>
+        <Path d={trunk} fill={BARK.mid} />
+        {/* Lowest tier first, so each higher tier overlaps the one below, as on a real spruce. */}
+        {Array.from({ length: PLAN_YEARS }, (_, i) => i + 1).map(year => (
+          <Path
+            key={year}
+            d={tier(year)}
+            fill={year % 2 === 0 ? BARK.foliage : BARK.foliageLight}
+            // Tight years are edged in lichen, the colour that means "tight"
+            // everywhere else in the app; the rest get a faint seafoam line.
+            stroke={tight.has(year) ? colors.warn : colors.accent}
+            strokeOpacity={tight.has(year) ? 0.9 : 0.35}
+            strokeWidth={line.hair}
+            strokeLinejoin="round"
+          />
+        ))}
+        {/* the leader */}
+        <Path d={`M${f(cx)},${f(TOP - 22)} L${f(cx)},${f(TOP - 4)}`} stroke={colors.accent} strokeWidth={line.path} strokeLinecap="round" opacity={0.7} />
+      </Svg>
+
+      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }} pointerEvents="none">
+        <Base width={W} trunk={trunkBotW} height={BASE} center={cx} />
+      </View>
+
+      {Array.from({ length: PLAN_YEARS }, (_, i) => PLAN_YEARS - i).map(year => {
+        const isTight = tight.has(year);
+        const mid = rowH / 2;
+        return (
+          <Pressable
+            key={year}
+            accessibilityRole="button"
+            accessibilityLabel={`Year ${year}, ${yearLabel(year)}${isTight ? ', a tight year' : ''}. Climb in to see its goals.`}
+            onPress={() => onClimb(year)}
+            style={({ pressed }) => [
+              styles.spruceRow,
+              { top: rowTop(year), height: rowH },
+              pressed && { backgroundColor: 'rgba(143, 227, 200, 0.07)' },
+            ]}
+          >
+            <View style={styles.spruceLabel}>
+              <Text style={[styles.overviewYearLabel, tabularNums]}>{yearLabel(year)}</Text>
+              <Text style={[styles.overviewYearIndex, isTight && { color: colors.warn }]}>
+                {isTight ? `Year ${year} · tight` : `Year ${year}`}
+              </Text>
+            </View>
+            {/* A hairline from the label to the tier it names. */}
+            <View
+              pointerEvents="none"
+              style={[
+                styles.spruceLeader,
+                { top: mid, left: GUTTER - 10, width: Math.max(0, cx - half(year) - GUTTER + 4) },
+              ]}
+            />
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Zoomed in: climb the bark year by year.
+// ---------------------------------------------------------------------------
+
+function TreeClimb({
+  goals,
+  tightYears,
+  yearLabel,
+  startLabel,
+  endLabel,
+  onOpenGoal,
+  onAddGoal,
+  footer,
+  initialYear,
+  onZoomOut,
+}: TreeProps & { initialYear: number; onZoomOut: () => void }) {
   const insets = useSafeAreaInsets();
   const scrollRef = useRef<ScrollViewInstance>(null);
-  // Stay anchored at the base until the person starts climbing: the content
-  // keeps growing as the trunk measures itself, and each growth would
-  // otherwise leave the view stranded part-way up.
-  const userMoved = useRef(false);
+  // For the first moment after zooming in, keep re-anchoring at the chosen
+  // year: the content grows as the trunk measures itself, and each growth
+  // would otherwise leave the view stranded somewhere else.
+  const mountedAt = useRef(Date.now());
+  const viewport = useRef(0);
   const segments = useRef(new Map<number, { y: number; h: number }>());
   const treeTop = useRef(0);
   const [width, setWidth] = useState(0);
@@ -118,27 +328,21 @@ export function TreeTimeline({
 
   const tight = new Set(tightYears);
   const funded = goals.filter(g => g.funded).length;
+  const { byYear, side } = groupGoals(goals);
 
-  // Goals by plan year; within a year the later goal sits higher up the trunk.
-  const byYear = new Map<number, TreeGoal[]>();
-  for (const g of goals) {
-    const year = Math.min(PLAN_YEARS, Math.max(1, Math.floor((g.targetMonth - 1) / 12) + 1));
-    byYear.set(year, [...(byYear.get(year) ?? []), g]);
-  }
-  for (const list of byYear.values()) list.sort((a, b) => b.targetMonth - a.targetMonth);
-
-  // Twigs alternate sides up the whole tree, counting from the base.
-  const side = new Map<string, 'left' | 'right'>();
-  let n = 0;
-  for (let y = 1; y <= PLAN_YEARS; y++) {
-    for (const g of [...(byYear.get(y) ?? [])].reverse()) side.set(g.key, n++ % 2 === 0 ? 'right' : 'left');
-  }
-
-  // Start at the base: the first time the content has a size, jump to the end.
-  const onContentSizeChange = useCallback(() => {
-    if (userMoved.current) return;
-    scrollRef.current?.scrollToEnd({ animated: false });
-  }, []);
+  // Year 1 opens at the base; any other year opens with its groove low on the
+  // screen and its goals above it.
+  const anchor = useCallback(() => {
+    if (Date.now() - mountedAt.current > 1200) return;
+    if (initialYear <= 1) {
+      scrollRef.current?.scrollToEnd({ animated: false });
+      return;
+    }
+    const raw = segments.current.get(initialYear);
+    if (!raw || viewport.current === 0) return;
+    const y = raw.y + treeTop.current + raw.h - viewport.current * 0.8;
+    scrollRef.current?.scrollTo({ y: Math.max(0, y), animated: false });
+  }, [initialYear]);
 
   // Which year is in the middle of the screen, for the floating marker.
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -158,9 +362,12 @@ export function TreeTimeline({
     if (y < top) found = 11;
     if (y >= bottom) found = 0;
     if (found !== inView) setInView(found);
-    if (contentOffset.y + layoutMeasurement.height < contentSize.height - 60) {
-      userMoved.current = true;
-      if (!climbed) setClimbed(true);
+    if (
+      Date.now() - mountedAt.current > 1200 &&
+      contentOffset.y + layoutMeasurement.height < contentSize.height - 60 &&
+      !climbed
+    ) {
+      setClimbed(true);
     }
   };
 
@@ -176,12 +383,12 @@ export function TreeTimeline({
   const edge = (width - midWidth) / 2;
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} onLayout={e => (viewport.current = e.nativeEvent.layout.height)}>
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
         contentContainerStyle={[styles.content, { paddingTop: insets.top + space.xl }]}
-        onContentSizeChange={onContentSizeChange}
+        onContentSizeChange={anchor}
         onScroll={onScroll}
         scrollEventThrottle={32}
       >
@@ -198,7 +405,7 @@ export function TreeTimeline({
                 : `${funded} of ${goals.length} ${goals.length === 1 ? 'goal' : 'goals'} funded by the time you reach the top.`}
             </Text>
           </View>
-          {width > 0 ? <Canopy width={width} /> : null}
+          {width > 0 ? <Canopy width={width} height={170} /> : null}
 
           {/* ----------------------------------------------------- the trunk */}
           <View
@@ -206,6 +413,8 @@ export function TreeTimeline({
             onLayout={e => {
               treeTop.current = e.nativeEvent.layout.y + insets.top + space.xl;
               setTreeHeight(e.nativeEvent.layout.height);
+              // Children lay out before their parent, so every year is known here.
+              anchor();
             }}
           >
             {width > 0 && treeHeight > 0 ? (
@@ -216,8 +425,11 @@ export function TreeTimeline({
               const yearGoals = byYear.get(year) ?? [];
               const isTight = tight.has(year);
               return (
-                <View key={year} onLayout={recordSegment(year)} style={styles.year}>
-                  {isTight && width > 0 ? <Moss width={width} edge={edge} seed={year} /> : null}
+                <View
+                  key={year}
+                  onLayout={recordSegment(year)}
+                  style={[styles.year, isTight && { backgroundColor: colors.warnBand }]}
+                >
 
                   {yearGoals.map(goal => (
                     <CarvedGoal
@@ -233,7 +445,7 @@ export function TreeTimeline({
                   {/* A groove across the bark where this year begins. */}
                   <View style={[styles.yearMark, { marginHorizontal: edge + 8 }]}>
                     <View style={styles.groove} />
-                    <View style={[styles.yearText, { paddingLeft: midWidth * 0.2 }]}>
+                    <View style={styles.yearText}>
                       <Text style={[styles.yearLabel, tabularNums]}>{yearLabel(year)}</Text>
                       <Text style={[styles.yearIndex, isTight && { color: colors.warn }]}>
                         {isTight ? `Year ${year} · tight year` : `Year ${year}`}
@@ -246,7 +458,7 @@ export function TreeTimeline({
           </View>
 
           {/* ----------------------------------------- the base: flare, roots */}
-          {width > 0 && treeHeight > 0 ? <Base width={width} trunk={trunkWidth(treeHeight)} /> : null}
+          {width > 0 && treeHeight > 0 ? <Base width={width} trunk={trunkWidth(treeHeight)} height={120} /> : null}
         </View>
 
         <View style={styles.today}>
@@ -273,7 +485,17 @@ export function TreeTimeline({
         </Text>
       </View>
 
-      {!climbed ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Zoom out to the whole tree"
+        onPress={onZoomOut}
+        style={({ pressed }) => [styles.zoomOut, { top: insets.top + space.sm }, pressed && { opacity: 0.8 }]}
+      >
+        <Icon name="back" size={16} color={colors.ink} />
+        <Text style={styles.altimeterText}>Whole tree</Text>
+      </Pressable>
+
+      {!climbed && initialYear <= 1 ? (
         <View pointerEvents="none" style={styles.climbHint}>
           <Icon name="up" size={18} color={colors.accent} />
           <Text style={styles.climbText}>Swipe up to climb</Text>
@@ -283,7 +505,7 @@ export function TreeTimeline({
   );
 }
 
-/** A goal carved into the bark, with a twig and a leaf out the side. */
+/** A goal beside the trunk, joined to it by a twig with a leaf. */
 function CarvedGoal({
   goal,
   side,
@@ -299,61 +521,65 @@ function CarvedGoal({
 }) {
   const leaf = goal.funded ? colors.accent : colors.error;
   const monthly = goal.monthlyCents !== undefined ? dollars(goal.monthlyCents, { showCents: true }) : '—';
+  const left = side === 'left';
+  const zone = Math.max(96, edge - 14);
+  const align = left ? ('right' as const) : ('left' as const);
+
+  const label = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${goal.title}, due ${goal.targetLabel}, ${goal.funded ? 'funded' : "doesn't fit yet"}. ${monthly} a month. Open details.`}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.sideGoal,
+        { width: zone, alignItems: left ? 'flex-end' : 'flex-start' },
+        pressed && { backgroundColor: colors.surface },
+      ]}
+    >
+      <View style={[styles.carvingHead, left && { flexDirection: 'row-reverse' }]}>
+        <Icon name={goal.icon} size={18} color={goal.color ?? colors.ink} />
+        <Text style={[styles.sideTitle, { textAlign: align }]} numberOfLines={3}>
+          {goal.title}
+        </Text>
+      </View>
+      <Text style={[styles.sideMeta, { textAlign: align }]}>{goal.targetLabel}</Text>
+      <Text style={[styles.sideMeta, { textAlign: align }]}>
+        {dollars(goal.costTodayCents)} today · {goal.priority === 'must' ? 'Must\u2011have' : 'Flexible'}
+      </Text>
+      <Text style={[styles.sideMonthly, tabularNums, { textAlign: align }]}>{monthly}</Text>
+      <Text style={[styles.sideMeta, { textAlign: align }]}>a month</Text>
+      <View style={[styles.statusRow, left && { flexDirection: 'row-reverse' }]}>
+        <View style={[styles.statusDot, { backgroundColor: leaf }]} />
+        <Text style={styles.sideMeta}>{goal.funded ? 'Funded' : "Doesn't fit yet"}</Text>
+      </View>
+    </Pressable>
+  );
+
   return (
-    <View style={styles.goalRow}>
-      {/* The twig, sticking out past the bark edge. */}
+    <View style={[styles.goalRow, { flexDirection: 'row', justifyContent: left ? 'flex-start' : 'flex-end' }]}>
+      {/* The twig, from the bark out towards the goal. */}
       {width > 0 ? (
         <View
           pointerEvents="none"
           style={[
             styles.twig,
-            side === 'left' ? { left: edge - 36 } : { right: edge - 36, transform: [{ scaleX: -1 }] },
+            left ? { left: edge - 40 } : { right: edge - 40, transform: [{ scaleX: -1 }] },
           ]}
         >
-          {/* Drawn pointing left; mirrored for the right side. It starts inside
-              the bark and pokes out into the gap beside the trunk. */}
           <Svg width={64} height={72}>
             <Path
-              d="M62 60 L40 50 L18 30 L23 25 L44 42 L62 50 Z"
-              fill={BARK.mid}
-              stroke={BARK.outline}
-              strokeWidth={2}
-              strokeLinejoin="round"
+              d="M62 58 C 48 54, 34 44, 22 30"
+              stroke={colors.accent}
+              strokeWidth={line.path}
+              fill="none"
+              strokeLinecap="round"
+              opacity={0.8}
             />
-            <FernLeafPaths x={21} y={28} length={30} angle={-112} opacity={1} color={leaf} veins={8} />
+            <FernLeafPaths x={22} y={31} length={28} angle={-118} opacity={0.95} color={leaf} veins={8} />
           </Svg>
         </View>
       ) : null}
-
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${goal.title}, due ${goal.targetLabel}, ${goal.funded ? 'funded' : "doesn't fit yet"}. ${monthly} a month. Open details.`}
-        onPress={onPress}
-        style={({ pressed }) => [
-          styles.carving,
-          { marginLeft: edge + width * 0.16, marginRight: edge + width * 0.06 },
-          pressed && { backgroundColor: 'rgba(30, 18, 12, 0.35)' },
-        ]}
-      >
-        <View style={styles.carvingHead}>
-          <Icon name={goal.icon} size={22} color={goal.color ?? BARK.ink} />
-          <Text style={styles.carvingTitle} numberOfLines={2}>
-            {goal.title}
-          </Text>
-        </View>
-        <Text style={styles.carvingMeta}>
-          {goal.targetLabel} · {dollars(goal.costTodayCents)} today ·{' '}
-          {goal.priority === 'must' ? 'Must‑have' : 'Flexible'}
-        </Text>
-        <Text style={[styles.carvingMonthly, tabularNums]}>
-          {monthly}
-          <Text style={styles.carvingMeta}> a month</Text>
-        </Text>
-        <View style={styles.statusRow}>
-          <View style={[styles.statusDot, { backgroundColor: leaf }]} />
-          <Text style={styles.carvingMeta}>{goal.funded ? 'Funded' : "Doesn't fit yet"}</Text>
-        </View>
-      </Pressable>
+      <View style={{ paddingHorizontal: 8, paddingTop: 54 }}>{label}</View>
     </View>
   );
 }
@@ -363,13 +589,18 @@ function Trunk({
   width,
   height,
   widthAt,
+  seed = 42,
+  density = 34,
 }: {
   width: number;
   height: number;
   widthAt: (y: number) => number;
+  seed?: number;
+  /** Pixels of trunk per crack: higher means fewer cracks. */
+  density?: number;
 }) {
   const art = useMemo(() => {
-    const rand = seeded(42);
+    const rand = seeded(seed);
     const c = width / 2;
     const step = 90;
     const left: [number, number][] = [];
@@ -395,7 +626,7 @@ function Trunk({
     // Bark cracks: long wavy hairlines, mostly near the edges so the carved
     // text stays readable down the middle.
     let cracks = '';
-    const count = Math.round(height / 34);
+    const count = Math.round(height / density);
     for (let i = 0; i < count; i++) {
       const y0 = rand() * height;
       const w = widthAt(y0);
@@ -414,7 +645,8 @@ function Trunk({
       }
     }
     return { outline, lit, shade, cracks };
-  }, [width, height, widthAt]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [width, height, seed, density]);
 
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill} aria-hidden>
@@ -422,101 +654,74 @@ function Trunk({
         <Path d={art.outline} fill={BARK.mid} />
         <Path d={art.lit} fill={BARK.light} />
         <Path d={art.shade} fill={BARK.shadow} />
-        <Path d={art.cracks} stroke={BARK.crack} strokeWidth={1.6} fill="none" strokeLinecap="round" opacity={0.85} />
-        <Path d={art.outline} stroke={BARK.outline} strokeWidth={2.5} fill="none" strokeLinejoin="round" />
-      </Svg>
-    </View>
-  );
-}
-
-/** Moss on a tight year: a flat patch on the shaded side of the bark. */
-function Moss({ width, edge, seed }: { width: number; edge: number; seed: number }) {
-  const rand = seeded(seed * 97);
-  const x = width - edge - 70;
-  const y = 40 + rand() * 120;
-  let d = `M${f(x)},${f(y)}`;
-  const n = 9;
-  for (let i = 1; i <= n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const r = 34 + rand() * 18;
-    d += ` Q${f(x + Math.cos(a - 0.35) * (r + 8))},${f(y + Math.sin(a - 0.35) * (r + 14))} ${f(x + Math.cos(a) * r)},${f(y + Math.sin(a) * (r + 10))}`;
-  }
-  return (
-    <View pointerEvents="none" style={StyleSheet.absoluteFill} aria-hidden>
-      <Svg width={width} height={260}>
-        <Path d={d + ' Z'} fill={BARK.moss} opacity={0.95} />
-        <Path d={`M${f(x - 12)},${f(y)} a6,6 0 1 0 12,0 a6,6 0 1 0 -12,0 M${f(x + 14)},${f(y + 18)} a4,4 0 1 0 8,0 a4,4 0 1 0 -8,0`} fill={BARK.mossDark} />
+        <Path d={art.cracks} stroke={BARK.crack} strokeWidth={line.hair} fill="none" strokeLinecap="round" opacity={0.6} />
       </Svg>
     </View>
   );
 }
 
 /** The foliage at the top, hanging down over the trunk: you only see it at the end. */
-function Canopy({ width }: { width: number }) {
-  const H = 170;
-  const rand = seeded(7);
-  // A scalloped lower edge of drooping fronds.
-  let d = `M0,0 L${f(width)},0 L${f(width)},${f(H * 0.55)}`;
-  const fronds = 9;
-  for (let i = fronds; i >= 1; i--) {
-    const x0 = (i / fronds) * width;
-    const x1 = ((i - 1) / fronds) * width;
-    const depth = H * (0.62 + rand() * 0.38);
-    d += ` Q${f((x0 + x1) / 2 + (rand() - 0.5) * 18)},${f(depth + 30)} ${f(x1)},${f(H * (0.45 + rand() * 0.2))}`;
-  }
-  d += ' Z';
-  // Frond veins.
-  let veins = '';
-  for (let i = 0; i < 16; i++) {
-    const x = rand() * width;
-    const y = 30 + rand() * (H * 0.5);
-    veins += ` M${f(x)},${f(y)} q${f((rand() - 0.5) * 20)},18 ${f((rand() - 0.5) * 10)},${f(34 + rand() * 30)}`;
-  }
+function Canopy({ width, height, overlap }: { width: number; height: number; overlap?: number }) {
+  const H = height;
+  // Three flat bands of boughs, each with a notched lower edge like the
+  // spruces in the background, darkest at the back. One faint seafoam line
+  // along the front edge, as everywhere else in the app.
+  const band = (bottom: number, depth: number, teeth: number, seed: number) => {
+    const rand = seeded(seed);
+    let d = `M0,0 L${f(width)},0 L${f(width)},${f(bottom)}`;
+    for (let k = teeth; k >= 1; k--) {
+      const x0 = (k / teeth) * width;
+      const x1 = ((k - 1) / teeth) * width;
+      const tip = bottom + depth * (0.6 + rand() * 0.4);
+      d += ` L${f((x0 + x1) / 2)},${f(tip)} L${f(x1)},${f(bottom)}`;
+    }
+    return d + ' Z';
+  };
+  const front = band(H * 0.55, H * 0.32, 9, 3);
   return (
-    <View style={[styles.canopy, { height: H }]} pointerEvents="none" aria-hidden>
-      <Svg width={width} height={H + 40}>
-        <Path d={d} fill={BARK.foliage} stroke={BARK.foliageDark} strokeWidth={2} strokeLinejoin="round" />
-        <Path d={veins} stroke={BARK.foliageDark} strokeWidth={1.5} fill="none" strokeLinecap="round" />
-        <Path d={`M0,0 L${f(width)},0 L${f(width)},22 L0,22 Z`} fill={BARK.foliageLight} opacity={0.35} />
+    <View style={[styles.canopy, { height: H, marginBottom: -(overlap ?? Math.round(H * 0.4)) }]} pointerEvents="none" aria-hidden>
+      <Svg width={width} height={H + 10}>
+        <Path d={band(H * 0.25, H * 0.3, 7, 1)} fill={colors.treeFar} />
+        <Path d={band(H * 0.4, H * 0.3, 8, 2)} fill={BARK.foliageLight} />
+        <Path d={front} fill={BARK.foliage} />
+        <Path d={front} stroke={colors.accent} strokeOpacity={0.35} strokeWidth={line.hair} fill="none" strokeLinejoin="round" />
       </Svg>
     </View>
   );
 }
 
-/** The base: the trunk flares into roots that grip the ground, with bushes either side. */
-function Base({ width, trunk }: { width: number; trunk: number }) {
-  const H = 120;
-  const c = width / 2;
+/** The base: the trunk flares into roots, drawn as line-work along the ground. */
+function Base({
+  width,
+  trunk,
+  height,
+  center,
+}: {
+  width: number;
+  trunk: number;
+  height: number;
+  center?: number;
+}) {
+  const H = height;
+  const c = center ?? width / 2;
   const t = trunk / 2;
-  const g = 86; // ground line
-  const flare = `M${f(c - t)},0 L${f(c + t)},0 C${f(c + t + 4)},40 ${f(c + t + 20)},70 ${f(Math.min(width - 4, c + t + 46))},${g} L${f(Math.max(4, c - t - 46))},${g} C${f(c - t - 20)},70 ${f(c - t - 4)},40 ${f(c - t)},0 Z`;
-  const lit = `M${f(c - t)},0 L${f(c - t + trunk * 0.2)},0 L${f(c - t + trunk * 0.12)},${g} L${f(Math.max(4, c - t - 46))},${g} C${f(c - t - 20)},70 ${f(c - t - 4)},40 ${f(c - t)},0 Z`;
+  const g = Math.round(H * 0.6); // ground line
+  const spread = Math.min(46, t + 18);
+  const flare = `M${f(c - t)},0 L${f(c + t)},0 C${f(c + t + 2)},${f(g * 0.5)} ${f(c + t + spread * 0.4)},${f(g * 0.85)} ${f(c + t + spread)},${g} L${f(c - t - spread)},${g} C${f(c - t - spread * 0.4)},${f(g * 0.85)} ${f(c - t - 2)},${f(g * 0.5)} ${f(c - t)},0 Z`;
   return (
     <View style={styles.base} aria-hidden>
       <Svg width={width} height={H}>
         <Path d={flare} fill={BARK.mid} />
-        <Path d={lit} fill={BARK.light} />
+        {/* roots: seafoam line-work spreading out under the ground */}
         <Path
-          d={`M${f(c - t * 0.4)},20 q4,30 -2,60 M${f(c + t * 0.3)},10 q-6,34 2,70 M${f(c + t * 0.75)},30 q4,24 14,50`}
-          stroke={BARK.crack}
-          strokeWidth={1.6}
+          d={`M${f(c - t)},${g} C${f(c - t - 30)},${g + 6} ${f(c - t - 70)},${g + 4} ${f(c - t - 120)},${g + 12} M${f(c - 4)},${g} C${f(c - 10)},${g + 10} ${f(c - 30)},${g + 16} ${f(c - 54)},${g + 22} M${f(c + t)},${g} C${f(c + t + 34)},${g + 8} ${f(c + t + 80)},${g + 4} ${f(c + t + 130)},${g + 14} M${f(c + 4)},${g} C${f(c + 12)},${g + 12} ${f(c + 34)},${g + 18} ${f(c + 60)},${g + 22}`}
+          stroke={colors.accent}
+          strokeWidth={line.hair}
           fill="none"
           strokeLinecap="round"
+          opacity={0.55}
         />
-        <Path d={flare} stroke={BARK.outline} strokeWidth={2.5} fill="none" strokeLinejoin="round" />
-        {/* roots running along the ground */}
-        <Path
-          d={`M${f(c - t - 30)},${g - 2} C${f(c - t - 60)},${g + 6} ${f(c - t - 90)},${g + 4} ${f(c - t - 130)},${g + 14} M${f(c + t + 30)},${g - 2} C${f(c + t + 64)},${g + 8} ${f(c + t + 96)},${g + 2} ${f(c + t + 140)},${g + 16}`}
-          stroke={BARK.outline}
-          strokeWidth={5}
-          fill="none"
-          strokeLinecap="round"
-        />
-        {/* bushes either side, flat */}
-        <Path d={`M0,${g} q14,-34 40,-22 q12,-22 36,-6 q10,10 4,28 Z`} fill={colors.treeFar} stroke={BARK.foliageDark} strokeWidth={1.5} />
-        <Path d={`M${f(width)},${g} q-16,-38 -44,-24 q-14,-20 -36,-2 q-8,12 -2,26 Z`} fill={colors.treeFar} stroke={BARK.foliageDark} strokeWidth={1.5} />
         <Path d={`M0,${g} L${f(width)},${g}`} stroke={colors.ruleStrong} strokeWidth={line.hair} />
-        <Path d={`M20,${g + 18} q16,-3 32,0 t32,0 t32,0 M${f(width - 140)},${g + 24} q16,-3 32,0 t32,0`} stroke={colors.accent} strokeWidth={line.hair} fill="none" opacity={0.3} />
       </Svg>
     </View>
   );
@@ -545,18 +750,18 @@ const styles = StyleSheet.create({
     maxWidth: 320,
   },
   // The foliage hangs over the top of the trunk.
-  canopy: { zIndex: 2, marginBottom: -70 },
+  canopy: { zIndex: 2 },
 
   tree: { position: 'relative' },
-  year: { minHeight: YEAR_MIN_HEIGHT, justifyContent: 'flex-end', paddingTop: 80 },
+  year: { minHeight: YEAR_MIN_HEIGHT, justifyContent: 'flex-end', paddingTop: 40 },
 
   yearMark: { paddingBottom: space.md },
   groove: { height: 3, backgroundColor: BARK.crack, borderRadius: 2, opacity: 0.9, marginBottom: space.sm },
-  yearText: { flexDirection: 'row', alignItems: 'baseline', gap: space.sm },
-  yearLabel: { fontFamily: fonts.numeral, fontSize: 26, lineHeight: 32, color: BARK.ink },
+  yearText: { alignItems: 'center' },
+  yearLabel: { fontFamily: fonts.numeral, fontSize: 19, lineHeight: 24, color: BARK.ink },
   yearIndex: { ...typeScale.caption, color: BARK.meta },
 
-  goalRow: { position: 'relative', marginBottom: space.xl, justifyContent: 'center' },
+  goalRow: { position: 'relative', marginBottom: space.lg, justifyContent: 'center' },
   twig: { position: 'absolute', top: 0 },
   carving: { paddingVertical: space.sm, paddingHorizontal: space.sm, borderRadius: 6, minHeight: 44 },
   carvingHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
@@ -582,6 +787,68 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   altimeterText: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.ink },
+  zoomOut: {
+    position: 'absolute',
+    left: space.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    minHeight: 36,
+    backgroundColor: colors.band,
+    borderWidth: line.hair,
+    borderColor: colors.ruleStrong,
+    borderRadius: 999,
+    paddingLeft: space.sm,
+    paddingRight: space.md,
+  },
+
+  overview: { width: '100%', maxWidth: COLUMN_MAX_WIDTH, alignSelf: 'center' },
+  overviewHead: { alignItems: 'center', paddingHorizontal: space.sidePadding, paddingBottom: space.sm },
+  overviewArea: { flex: 1, width: '100%', maxWidth: COLUMN_MAX_WIDTH, alignSelf: 'center' },
+  spruceRow: { position: 'absolute', left: 0, right: 0, justifyContent: 'center', paddingLeft: space.md },
+  spruceLabel: { width: 96 },
+  spruceLeader: { position: 'absolute', height: 1, backgroundColor: colors.ruleStrong },
+  sideGoal: { paddingVertical: space.xs, paddingHorizontal: 4, borderRadius: 6, minHeight: 44 },
+  sideTitle: { fontFamily: fonts.numeral, fontSize: 16, lineHeight: 20, color: colors.ink, flexShrink: 1 },
+  sideMeta: { ...typeScale.caption, fontSize: 12, lineHeight: 16, color: colors.ink2 },
+  sideMonthly: { fontFamily: fonts.numeral, fontSize: 17, lineHeight: 22, color: colors.ink, marginTop: 2 },
+  overviewTitle: { ...typeScale.title, fontSize: 22, lineHeight: 28, color: colors.ink, marginTop: 2 },
+  overviewSummary: { ...typeScale.caption, color: colors.ink2, marginTop: 4, textAlign: 'center' },
+  overviewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+  },
+  miniGroove: { position: 'absolute', bottom: 0, height: 2, borderRadius: 1, backgroundColor: BARK.crack },
+  overviewYear: { width: 66 },
+  overviewYearLabel: { fontFamily: fonts.numeral, fontSize: 16, lineHeight: 19, color: colors.ink },
+  overviewYearIndex: { fontFamily: fonts.textMedium, fontSize: 11, lineHeight: 14, color: colors.ink2 },
+  overviewGoals: { flex: 1, gap: 2 },
+  overviewGoal: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  overviewGoalText: { fontFamily: fonts.textSemi, fontSize: 12, lineHeight: 16, color: BARK.ink, flexShrink: 1 },
+  overviewGoalMore: { fontFamily: fonts.textMedium, fontSize: 11, color: BARK.meta },
+  miniTwig: { position: 'absolute', top: 2 },
+  miniMoss: {
+    position: 'absolute',
+    top: 6,
+    width: 26,
+    height: 18,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 9,
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 13,
+    backgroundColor: BARK.moss,
+  },
+  overviewActions: {
+    flexDirection: 'row',
+    gap: space.sm,
+    paddingHorizontal: space.md,
+    paddingBottom: space.sm,
+    width: '100%',
+    maxWidth: COLUMN_MAX_WIDTH,
+    alignSelf: 'center',
+  },
+
   climbHint: {
     position: 'absolute',
     bottom: space.md,
