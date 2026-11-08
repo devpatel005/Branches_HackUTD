@@ -46,7 +46,16 @@ _Confirmed against `@google/genai` 3.0.0 and a live call, Stage 8._
 - **Errors are thrown, not returned**, as named classes (`RateLimitError`, `BadRequestError`, …) carrying `.status`.
 - **`error.message` is useless for diagnosis.** A rejected key arrives as `400 API error occurred: {"httpMeta":{"response":{},"request":{}}}`; Google's actual explanation is only in `error.body`. `messageOf` in `providers.ts` unwraps it, which turned an opaque 400 into "API key not valid" in one step.
 - **The SDK POSTs its request body verbatim** to `{baseUrl}/v1/interactions`. That is what lets `GEMINI_BASE_URL` point at the bundled mock and exercise the real adapter with no key. Note it takes an **origin**, with no path.
-- **Key format matters.** An AI Studio API key looks like `AIza…` (~39 chars). A credential beginning `AQ.` is not one — it is an ephemeral/session token and the Gemini API rejects it as "API key not valid".
+- **Do not diagnose a credential by its prefix.** An earlier note here claimed an `AQ.`-prefixed key could not be a valid API key, since `AQ.` matches Gemini's documented ephemeral-token format and the SDK warns those are `v1alpha`-only. It was wrong: the `AQ.` key worked, and the `AIza…` key being blamed for it was the dead one. Both formats are in circulation. **Print the value the process actually received — prefix and length — before reasoning about a rejected key.**
+- **`--env-file-if-exists` does not override an already-set variable.** A stale `export GEMINI_API_KEY` in `~/.zshrc` therefore shadows `services/agent/.env` silently, and the result is an unexplained `400 API_KEY_INVALID`. `services/agent/src/env-file.ts` makes `.env` authoritative and prints the name of anything it displaces, masked to prefix + length.
+- **Available model names are checkable** without the SDK, which is the fastest way to rule a model name in or out:
+  ```bash
+  curl -s -H "x-goog-api-key: $KEY" \
+    'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200' \
+    | grep -o '"name": "models/[^"]*"'
+  ```
+  `gemini-3.8-flash` and `gemini-3.5-flash-lite` are both live. Requesting a retired model returns a 404 that names its replacement.
+- **Rate limits are per Google Cloud project, not per key.** A second key in the same project shares the same quota, so give each developer their own project and keep a separate one for the demo.
 
 ## Nemotron
 

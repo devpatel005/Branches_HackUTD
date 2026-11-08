@@ -244,7 +244,15 @@ key — and would have expired regardless. It is also possible the key was revok
 since it was printed in full in an earlier session's transcript when a masking
 pattern failed to match that prefix.
 
-**So A8 remains PENDING, and it needs a person**, not more code: create an API
+**Superseded 2026-11-08 — A8 is SETTLED, 6/6 on both tiers.** The cause was a
+stale `GEMINI_API_KEY` exported from `~/.zshrc`, which Node's
+`--env-file-if-exists` will not override, so the valid key in
+`services/agent/.env` was never used. Fixed by `services/agent/src/env-file.ts`,
+which makes `.env` authoritative and names whatever it displaces. Full account:
+[[18 Stage 8 Pass 1 Record]] §1. The paragraph below is left for the record and
+is **wrong**.
+
+~~So A8 remains PENDING, and it needs a person~~, not more code: create an API
 key in AI Studio and put it in `services/agent/.env` as `GEMINI_API_KEY`. Then
 `npm run -w @branches/agent smoke` prints `A8 SETTLED` or names exactly what the
 model rejected. Everything around it is built and proven against the real SDK.

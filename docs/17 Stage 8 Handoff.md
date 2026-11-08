@@ -12,7 +12,11 @@ tags: [branches, handoff, stage8]
 >
 > Two things changed from the plan below: the SDK findings in
 > [[14 Research Notes#Gemini]] were not in the spec and cost real time, and
-> **A8 is still PENDING** — the key in `Creds.md` is rejected as invalid, so it
+> ~~**A8 is still PENDING** — the key in `Creds.md` is rejected as invalid, so it~~
+> **Resolved 2026-11-08: A8 is SETTLED, 6/6. The key in `Creds.md` was always
+> valid; a stale `GEMINI_API_KEY` in `~/.zshrc` was shadowing it. See
+> [[18 Stage 8 Pass 1 Record]] §1. The struck-through text below is wrong.**
+> ~~so it~~
 > needs a new one from AI Studio rather than more code.
 
 Working notes for the next session. Stages 0–7 are complete and committed; this

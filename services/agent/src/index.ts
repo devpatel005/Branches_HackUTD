@@ -1,3 +1,5 @@
+import './env-file.ts'; // .env beats the ambient shell; must evaluate first
+
 import { DbConnection, tables, reducers } from '@branches/bindings';
 import type { Identity } from 'spacetimedb';
 import { fallbackFor } from './fallbacks.ts';

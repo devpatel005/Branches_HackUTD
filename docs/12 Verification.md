@@ -43,7 +43,7 @@ Run in two modes: **recorded** (no network, deterministic) and **mock** (`BRANCH
 | A5 | Fallback | With the model forced to fail, fallback branches/names appear and the job ends `failed` gracefully |
 | A6 | Failover | Simulated 429 on tier 1 → tier 2 used; `modelUsed` recorded |
 | A7 | **Privacy canaries** | Every logged prompt from a full demo run contains **none** of the private-purchase merchant names, no transaction counterparties, and no raw transactions |
-| A8 | Live model (needs a key) | The model name resolves, `thinking_level` and `tool_choice.allowed_tools` are accepted, and the interaction ends `requires_action` with a parsed function call — not `incomplete`. `npm run -w @branches/agent smoke` |
+| A8 | **Live model — SETTLED 2026-11-08, 6/6** | Both model names resolve, `thinking_level` and `tool_choice.allowed_tools` are accepted as sent, and the interaction ends `requires_action` with a parsed function call. `npm run -w @branches/agent smoke`. Needs a key in `services/agent/.env`, which now wins over the shell — see [[18 Stage 8 Pass 1 Record#1. The Gemini API problem — SOLVED 2026-11-08]] |
 | A9 | Provider normalisation | Both adapters reduce to the same four statuses; `incomplete` / `failed` / an unexpected status are never read as answers; a Gemini thought step is not reported as leaked reasoning while OpenAI `reasoning_content` is |
 
 ## V6 Real-time checklist

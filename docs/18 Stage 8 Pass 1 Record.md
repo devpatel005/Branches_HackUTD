@@ -9,7 +9,8 @@ be read *after* this session's context is gone.
 Commit `f3df189` — "Stage 8 pass 1: Gemini, robustness, never-stuck, reducer
 hardening". 36 files, +2826 / −506. Pushed to `main`.
 
-**Read §1 first** if the only thing you want is the Gemini API problem.
+**§1 was rewritten on 2026-11-08**: the Gemini API problem is **solved** and
+A8 is settled. Read it for the cause and the fix — not as an open issue.
 
 Related: [[Stage 8 - Polish and Demo Hardening]] (the Build Log, which is the
 canonical narrative) · [[17 Stage 8 Handoff]] (the plan this pass worked from,
@@ -17,98 +18,104 @@ now superseded) · [[14 Research Notes#Gemini]] (SDK facts) · [[07 Agent Spec]]
 
 ---
 
-## 1. The Gemini API problem — what you need to decide
+## 1. The Gemini API problem — SOLVED 2026-11-08
 
-### The short version
-
-The integration is **built, complete, and proven against the real SDK**. It
-cannot be proven against the real *model* because **the key in `Creds.md` is
-rejected by Google as invalid.** That is a credential problem, not a code
-problem, and it needs you rather than another build pass.
-
-### Exactly what happened
-
-`npm run -w @branches/agent smoke` against the live endpoint, both tiers:
+**A8 is SETTLED.** The live model works: `6/6 passed`, both tiers, forced tool
+call parsed and in schema. Nothing here is outstanding.
 
 ```
-FAIL  t1 gemini-3.8-flash: the call succeeded       400 BadRequestError: API key not valid. Please pass a valid API key.
-FAIL  t2 gemini-3.5-flash-lite: the call succeeded  400 BadRequestError: API key not valid. Please pass a valid API key.
+PASS  t1 gemini-3.8-flash: a forced tool call came back             classify_life_event
+PASS  t1 gemini-3.8-flash: not truncated (status is not incomplete) requires_action
+PASS  t1 gemini-3.8-flash: arguments match the schema               baby
+PASS  t2 gemini-3.5-flash-lite: a forced tool call came back        classify_life_event
+PASS  t2 gemini-3.5-flash-lite: not truncated                       requires_action
+PASS  t2 gemini-3.5-flash-lite: arguments match the schema          baby
 ```
 
-Google's full error body:
+### The cause: a stale key in `~/.zshrc` shadowed the real one
 
-```json
-{ "error": { "code": 400, "message": "API key not valid. Please pass a valid API key.",
-             "status": "INVALID_ARGUMENT",
-             "details": [ { "reason": "API_KEY_INVALID",
-                            "domain": "googleapis.com",
-                            "metadata": { "service": "generativelanguage.googleapis.com" } } ] } }
+`~/.zshrc:20` exported a **different, invalid** `GEMINI_API_KEY` (an `AIza…`
+value, 39 chars) left over from earlier work. Node's `--env-file-if-exists`
+**deliberately does not override variables already set in `process.env`**, so
+the shell's dead key won and the valid key sitting in `services/agent/.env`
+was never used. Every call came back:
+
+```
+400 BadRequestError: API key not valid. Please pass a valid API key.
 ```
 
-### How I know it is not our request shape
+which reads exactly like "the key in `.env` is bad" when the key in `.env` was
+fine the whole time.
 
-I ran a **bare** call with no tools, no `thinking_level`, no `tool_choice`,
-no `response_format` — just `{ model, store: false, input: 'Say hi in 3 words.' }`.
-It failed **identically**. The request never got as far as being judged, so
-nothing about our body is implicated.
+### How it was isolated
 
-### Why the key is probably wrong rather than revoked
+Curling the REST endpoint directly, same body, same header, one variable
+changed at a time:
 
-| | Key in `Creds.md` | An AI Studio API key |
+| API version | Key | Result |
 |---|---|---|
-| Prefix | `AQ.` | `AIza` |
-| Length | 53 characters | ~39 characters |
+| `/v1/interactions` | `.env` (the real one) | **HTTP 200** |
+| `/v1/interactions` | `~/.zshrc` | HTTP 400 `API_KEY_INVALID` |
+| `/v1beta/interactions` | `~/.zshrc` | HTTP 400 `API_KEY_INVALID` |
 
-An `AQ.`-prefixed credential is a Gemini **ephemeral / session token**, not an
-API key. Those are minted for short-lived client use (the Live API) and expire
-in roughly half an hour, so it would have stopped working regardless of
-anything we did.
+The key is the only variable that changes the outcome; the API version is not
+implicated. Then a fetch-instrumented SDK probe printed
+`env GEMINI_API_KEY: prefix=AIza len=39` — proving which value the process had
+actually received, which is the fact every earlier guess was missing.
 
-I verified my extraction was **faithful and complete** before concluding this:
-`Creds.md` line 1 is 58 characters total, its character classes are only
-`[A-Za-z0-9_.-]` plus a space and a colon, and `"Key: "` is 5 characters — so
-53 characters is the whole value with nothing clipped by the regex.
+### The fix, so it cannot recur
 
-**A second possibility, worth knowing:** this key was printed in full in an
-earlier session's terminal output, because a masking pattern did not anticipate
-the `AQ.` prefix. If Google's secret scanning saw it, it may have been revoked
-on top of being the wrong kind of credential.
+`services/agent/src/env-file.ts` (new) makes `.env` **authoritative over the
+ambient shell** and names anything it displaces:
 
-### What to do
+```
+.env overrides GEMINI_API_KEY from the environment:
+    .env         AQ.A…(53 chars)
+    environment  AIza…(39 chars)   <- ignored (check ~/.zshrc)
+```
 
-1. Go to **https://aistudio.google.com** → Get API key. Free tier needs phone
-   verification.
-2. Put it in `services/agent/.env`:
-   ```
-   GEMINI_API_KEY=AIza...
-   ```
-   That file is gitignored (`.gitignore:2`) and is now actually *read* — see
-   §6.4, because it was not before.
-3. Run:
-   ```bash
-   npm run -w @branches/agent smoke
-   ```
-   It prints `A8 SETTLED` if the model accepts the forced tool call, or names
-   exactly what was rejected. The script was rewritten for this purpose.
-4. Update `Creds.md` with the new key, and keep the old one out of it.
+Credentials are masked to prefix + length — enough to tell two keys apart,
+never enough to leak one. Imported for its side effect as the **first** import
+in `src/index.ts` and `src/smoke.ts`, ahead of anything that reads
+`process.env`. A service directory's own config file should beat whatever
+happens to be exported in the terminal that started it.
 
-**Rate limits are per Google Cloud *project*, not per key**, and differ by
-model. Give each developer their own project and keep a separate project for
-the demo, or testing will exhaust the demo's quota.
+Verified by running `npm run -w @branches/agent smoke` with the stale export
+still in place: 6/6, with the warning above.
 
-### What A8 still cannot tell you until that happens
+### Recommended cleanup (optional, your call — it is your dotfile)
 
-- Whether `gemini-3.8-flash` and `gemini-3.5-flash-lite` are live model names.
-  A wrong name surfaces here as a 404 / `NOT_FOUND`, and nothing before this
-  point can catch it.
-- Whether `thinking_level: "low"` and
-  `tool_choice: { allowed_tools: { mode: "any", tools: [...] } }` are accepted
-  as sent by the real endpoint.
-- Whether a real interaction ends `requires_action` with a parsed function call
-  rather than `incomplete`.
+Delete or fix `~/.zshrc:20`. The project no longer needs it removed, but any
+*other* tool reading `GEMINI_API_KEY` from your shell — the Gemini CLI, a
+scratch script — is still getting the dead key.
 
-Everything *around* those three is built and tested. See §2.5 for what the mock
-does and does not prove.
+### What this corrects
+
+An earlier draft of this section concluded the key in `Creds.md` was an
+invalid `AQ.`-prefixed **ephemeral session token** and told you to replace it.
+**That was wrong, and the reasoning is worth knowing because it is a trap.**
+The `AQ.` prefix and 53-char length genuinely do match Gemini's documented
+ephemeral-token format, and the SDK itself warns that ephemeral tokens are
+`v1alpha`-only. The inference was plausible, internally consistent, and
+confirmed by a bare request that failed identically — and still false, because
+every one of those observations is about a key the process **was not using**.
+The lesson: when a credential is rejected, print what the process actually
+received before reasoning about what it should have received.
+
+`Creds.md` is correct as it stands. Do not replace the key in it.
+
+### Facts established along the way
+
+- Both spec'd model names are real and available: `gemini-3.8-flash` and
+  `gemini-3.5-flash-lite` both appear in `v1beta/models` for this key.
+- The SDK is the right one and current: `@google/genai` **3.0.0** is the latest
+  published version, and `interactions.create` is present with the exact
+  parameter shapes used in `providers.ts`.
+- The SDK POSTs to `https://generativelanguage.googleapis.com/v1/interactions`
+  with the key in an `x-goog-api-key` header.
+- **Rate limits are per Google Cloud *project*, not per key.** Give each
+  developer their own project and keep a separate one for the demo, or testing
+  will exhaust the demo's quota.
 
 ---
 

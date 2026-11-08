@@ -14,6 +14,8 @@
  *
  *   GEMINI_API_KEY=... npm run -w @branches/agent smoke    # live: settles A8
  */
+import './env-file.ts'; // .env beats the ambient shell; must evaluate first
+
 import { callTier, tiersFromEnv, timeoutMs, type Tier } from './providers.ts';
 import { classifyLifeEventTool, SYSTEM_PROMPT } from './tools.ts';
 import { classifyLifeEventSchema } from './validate.ts';
