@@ -4,7 +4,9 @@ import { InviteBanner } from '../../src/invite-banner';
 import { colors } from '../../src/theme';
 
 /**
- * Three tabs: Home, Timeline, Chat (09 Design System#Layout).
+ * Four tabs: Home, Timeline, Chat, Menu (09 Design System#Layout).
+ * Menu is the reset-and-diagnostics page; it is last so a stray tap during the
+ * demo is unlikely to land on it.
  * Icons are emoji for now so Stage 0 pulls in no icon dependency.
  */
 function TabIcon({ glyph, color }: { glyph: string; color: ColorValue }) {
@@ -40,6 +42,10 @@ export default function TabsLayout() {
         <Tabs.Screen
           name="chat"
           options={{ title: 'Chat', tabBarIcon: ({ color }) => <TabIcon glyph="◇" color={color} /> }}
+        />
+        <Tabs.Screen
+          name="menu"
+          options={{ title: 'Menu', tabBarIcon: ({ color }) => <TabIcon glyph="≔" color={color} /> }}
         />
       </Tabs>
     </View>

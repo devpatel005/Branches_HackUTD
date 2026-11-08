@@ -7,7 +7,7 @@ Visual rules: [[09 Design System]]. Every screen works on phone (Expo Go) and la
 
 ## Navigation
 - First launch → **Welcome**.
-- After onboarding → tabs: **Home · Timeline · Chat**.
+- After onboarding → tabs: **Home · Timeline · Chat · Menu**.
 - **Session** opens full-screen from the invite banner or Chat.
 - Sheets: Goal Detail, Show the Math, Assumptions, Fun Money.
 
@@ -55,6 +55,26 @@ Visual rules: [[09 Design System]]. Every screen works on phone (Expo Go) and la
 - Text box: "None of these fit? Tell us what you want." → agent translates to constraints.
 - Hold-to-confirm ring when everyone agrees.
 - Post-commit: "This is your plan now" + agent summary + **View timeline**.
+
+## Menu
+The fourth tab. Not part of the journey — it is the page you need *between* runs.
+
+- **One button: "Reset everything."** Calls `reseedHousehold`, which clears the
+  whole plan and sets `onboarded` back to false. `RouteGate` watches that flag,
+  so one tap sends **both** devices back to the start of onboarding at once —
+  the reset needs no navigation of its own.
+- It **arms on the first tap and acts on the second**, because this tab is
+  reachable during the demo and a stray tap would wipe the plan with no undo.
+- What it keeps, deliberately: the household, both members and the join code
+  (so the devices stay paired), and the imported transactions (so inference
+  re-runs from the same data). Pinned by `verify:flow` R1–R9.
+- Below the button, the facts that are awkward to find while driving two tabs:
+  device slot, your name, join code, member count, onboarded state, database
+  and host. On web it also points at `?device=b`.
+
+Not reachable mid-onboarding — it lives behind the tabs. Clearing browser
+storage is still the only escape from a half-finished onboarding, since
+there is no way to leave a household ([[13 Open Decisions]] OD-21).
 
 ## Sheets
 - **Show the Math:** formula in words, inputs, assumptions, result. Readable by a non-expert.

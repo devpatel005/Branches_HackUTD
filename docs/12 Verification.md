@@ -70,6 +70,8 @@ Scripted in `verify:flow` where possible, otherwise manual.
 | R5 | Both call `setReady(true)` simultaneously | One commit (idempotent) |
 | R6 | Members selected different branches and both ready | No commit |
 
+The Menu tab's single "Reset everything" button calls `reseedHousehold`, whose behaviour is already pinned by `verify:flow` R1–R9 — including that it keeps both members, the join code and the transactions. There is no separate suite for the button itself.
+
 ## V8 UI checklist
 Manual.
 - [ ] Every screen in [[10 Screens]] renders in Expo Go and on web.
