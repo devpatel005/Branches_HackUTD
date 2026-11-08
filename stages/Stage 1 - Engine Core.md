@@ -151,6 +151,19 @@ is required. Contents were checked first and were only the Stage 0 counter.
 Worth knowing before the demo: **logging in after creating a local database
 orphans it.** Recorded in [[16 Dev Environment]].
 
+**Maincloud publish (after the Stage 1 work)**
+
+Deployed and verified: `verify:stdb` passes **8/8 against Maincloud** as well as
+against the local server. Dashboard <https://spacetimedb.com/branches>.
+
+The Stage 1 stale-publish detector earned itself immediately — D4 failed on the
+first Maincloud run. The module was in fact current; the failure was that
+`engineVersion` had been written by `init`, **which does not re-run on a module
+update**, so the column still held `0.0.0-stage0`. D3/D4 now read the row *after*
+calling a reducer, which is the only way to observe what the deployed module
+computes. Recorded in [[14 Research Notes]] because it will matter in Stage 2 for
+anything seeded at init.
+
 **Open**
 
 - OD-17 (negative rounding ties) is still parked, and Stage 1's goldens now

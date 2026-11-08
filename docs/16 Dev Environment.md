@@ -67,6 +67,30 @@ The version number is in the path, so this needs redoing after a CLI upgrade.
 Reverse with `--blockapp`. The LAN IP changes between networks — re-check with
 `ipconfig getifaddr en0`.
 
+## Maincloud is live
+Published in [[Stage 1 - Engine Core]]. Both environments are verified against
+the same `verify:stdb` suite (8/8 each).
+
+| | Host | Database |
+|---|---|---|
+| Local | `ws://127.0.0.1:3000` | `branches` |
+| Maincloud | `wss://maincloud.spacetimedb.com` | `branches` |
+
+Dashboard: <https://spacetimedb.com/branches>
+
+```bash
+npm run stdb:publish       # deploy the module to Maincloud
+SPACETIME_HOST=wss://maincloud.spacetimedb.com npm run verify:stdb   # verify it
+```
+
+`npm run stdb:publish` passes `--yes=remote`, which skips only the "publish to a
+non-local server?" prompt. The **break-clients** and **delete-data** prompts are
+deliberately left in place, so a publish can still never silently destroy data.
+
+Local stays the day-to-day loop: instant republish, no network, and nothing
+listens on a port the firewall cares about. Maincloud is for phone testing and
+the demo.
+
 ## Gotcha: logging in after creating a local database
 `spacetime login` changes the CLI's **active identity**. A local database created
 *before* logging in is owned by the earlier server-local identity, and the newly

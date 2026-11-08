@@ -7,7 +7,7 @@
   "scripts": {
     "build": "spacetime build --module-path .",
     "publish:local": "spacetime publish --module-path . --server local branches",
-    "publish": "spacetime publish --module-path . --server maincloud branches",
+    "publish": "spacetime publish --module-path . --server maincloud --yes=remote branches",
     "bindings": "spacetime generate --lang typescript --import-extension ts --module-path . --out-dir ../../packages/bindings/src",
     "typecheck": "tsc -p tsconfig.json"
   },

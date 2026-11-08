@@ -100,11 +100,7 @@ if (!before) throw new Error('counter row missing — republish the module');
 
 checks.push(
   check('D1', 'client A connected and received an identity', typeof a.identity.toHexString(), 'string'),
-  check('D2', 'client B connected with a different identity', a.identity.toHexString() === b.identity.toHexString(), false),
-  check('D3', 'engine ran inside the reducer: F1(12,000, 24)', before.engineCheck, f1SavingsNoInterest(12000, 24)),
-  // Compared against the local engine, not a literal: a mismatch means the
-  // published module is stale and needs `npm run stdb:publish:local`.
-  check('D4', 'published module matches the local engine version', before.engineVersion, ENGINE_VERSION)
+  check('D2', 'client B connected with a different identity', a.identity.toHexString() === b.identity.toHexString(), false)
 );
 
 // A calls the reducer; B must observe it through its own subscription.
@@ -116,6 +112,20 @@ const seenByB = await observed;
 checks.push(
   check('D5', "client B observed client A's increment", seenByB, target),
   check('D6', 'the reducer recorded who called it', readCounter(a)?.lastBumpedBy?.toHexString(), a.identity.toHexString())
+);
+
+// D3/D4 are read AFTER the reducer call, deliberately.
+//
+// `init` runs only on a database's FIRST publish, never on a module update, so
+// any column populated there goes stale the moment the module changes. Reading
+// the row post-increment observes what the *currently deployed* module computes,
+// which is the thing worth checking. Comparing against the local engine rather
+// than a literal makes this a stale-publish detector: if these disagree, the
+// deployed module is not built from this working tree.
+const after = readCounter(a);
+checks.push(
+  check('D3', 'engine ran inside the deployed reducer: F1(12,000, 24)', after?.engineCheck, f1SavingsNoInterest(12000, 24)),
+  check('D4', 'deployed module matches the local engine version', after?.engineVersion, ENGINE_VERSION)
 );
 
 // Reconnect with A's stored token: the identity must be preserved.

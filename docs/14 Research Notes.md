@@ -18,6 +18,16 @@ Condensed from the team's research documents. Items marked **(verify)** have not
   - **Per-client row filtering exists**, which resolves the warning in [[05 Data Model]]. Two mechanisms: `spacetimedb.clientVisibilityFilter.sql('SELECT * FROM t WHERE owner = :sender')`, and **per-user views** (`spacetimedb.view(...)` keyed on `ctx.sender`), where deleting a row the view depends on automatically drops the rows it exposed. Stage 2 should use these rather than relying on "all data is mock."
   - Generated TypeScript bindings use extensionless imports by default, which bundlers resolve but Node ESM does not. Generate with `--import-extension ts` so the same bindings work in Metro *and* in Node-run verification scripts.
   - `spacetime build` looks for `tsc` in the module's own `node_modules`; under npm workspaces it is hoisted, and the build then prints "tsc not found" and **silently skips typechecking**. A postinstall hook links it (`scripts/link-module-tsc.mjs`).
+- **`init` runs only on a database's FIRST publish, never on a module update.**
+  Any row or column populated in `init` goes stale the moment the module changes,
+  with no error and no warning — the module is current but the *data* is not.
+  Found on the Maincloud publish in [[Stage 1 - Engine Core]], where a version
+  string written at init still read `0.0.0-stage0` after a Stage 1 module was
+  deployed. This matters for Stage 2: anything seeded in `init` (assumption
+  defaults, a household row, demo data) needs either an explicit re-seed reducer
+  or `publish -c` to wipe and re-init. `verify:stdb` now reads its engine checks
+  *after* calling a reducer, which is the only way to observe what the deployed
+  module actually computes.
 - **Correction:** reducers still cannot make outbound HTTP calls, but **procedures and HTTP handlers can** (`ctx.http.fetch`). This does not change the design — the agent service stays a separate client, because validation, retries and failover belong outside the database — but it is no longer true that the module *cannot* reach the network.
 - **Note:** the research's sample `simulateYear` reducer never subtracted completed goal costs from savings. Don't reuse it; the yearly wrap (stretch) must follow [[06 Engine Spec]] semantics.
 
