@@ -91,6 +91,33 @@ Local stays the day-to-day loop: instant republish, no network, and nothing
 listens on a port the firewall cares about. Maincloud is for phone testing and
 the demo.
 
+## Gotcha: the host in `apps/mobile/.env`
+This has cost time twice, so it is worth stating plainly.
+
+**While developing on web, never set the host to this machine's LAN IP.** The
+browser runs on the same machine as the dev server, so loopback always works;
+the LAN IP leaves and re-enters the network stack and gets dropped by the
+firewall rule for `spacetimedb-standalone`. The symptom is an opaque
+`Load failed`. A phone is the opposite — loopback there means the phone itself.
+
+The app now guards against this: on **web only**, a private LAN host
+(`10.*`, `192.168.*`, `172.16-31.*`) is swapped for `ws://127.0.0.1:3000` with a
+console warning explaining why. A `wss://` Maincloud host is never touched, and
+native platforms are never touched.
+
+**Two layers of caching bite here:**
+1. `EXPO_PUBLIC_*` values are inlined at **bundle time** — editing `.env` needs
+   an Expo restart.
+2. `expo start --clear` clears Metro's *transform* cache but **not** Expo's env
+   cache. A stale host can survive it. To be sure:
+   ```bash
+   pkill -f "expo start"
+   rm -rf apps/mobile/.expo
+   npm run mobile:web
+   ```
+   Confirm with: `env: load .env` in the startup log, or grep the bundle for
+   `EXPO_PUBLIC_SPACETIME_HOST`.
+
 ## Gotcha: logging in after creating a local database
 `spacetime login` changes the CLI's **active identity**. A local database created
 *before* logging in is owned by the earlier server-local identity, and the newly

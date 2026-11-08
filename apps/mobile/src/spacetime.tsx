@@ -1,8 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
 import { SpacetimeDBProvider } from 'spacetimedb/react';
 import type { Identity } from 'spacetimedb';
 import { DbConnection } from '@branches/bindings';
-import { SPACETIME_DB_NAME, SPACETIME_HOST } from './config';
+import { SPACETIME_DB_NAME, resolveHost } from './config';
 import { loadToken, saveToken } from './token-store';
 
 type IdentityState = { identity: Identity | null; reusedToken: boolean };
@@ -44,8 +45,10 @@ export function BranchesSpacetimeProvider({ children }: { children: React.ReactN
   const connectionBuilder = useMemo(() => {
     if (!tokenLoaded) return null;
     const hadToken = token !== undefined;
+    const { host, note } = resolveHost(Platform.OS);
+    if (note) console.warn(`[spacetime] ${note}`);
     return DbConnection.builder()
-      .withUri(SPACETIME_HOST)
+      .withUri(host)
       .withDatabaseName(SPACETIME_DB_NAME)
       .withToken(token)
       .withAutomaticReconnect()
@@ -58,7 +61,7 @@ export function BranchesSpacetimeProvider({ children }: { children: React.ReactN
         // Name the target and the usual causes, because every one of them is
         // a config problem rather than a code problem.
         console.warn(
-          `[spacetime] could not connect to ${SPACETIME_HOST} (db "${SPACETIME_DB_NAME}"): ${error.message}\n` +
+          `[spacetime] could not connect to ${host} (db "${SPACETIME_DB_NAME}"): ${error.message}\n` +
             '  - is the server running?            npm run stdb:start\n' +
             '  - is the module published?          npm run stdb:publish:local\n' +
             '  - on a phone, 127.0.0.1 is the PHONE. Use the laptop LAN IP (and allow\n' +
