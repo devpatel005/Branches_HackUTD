@@ -14,6 +14,8 @@ import { generatePrivatePurchases, type PrivatePurchase } from '@branches/mock-d
  * ever shows up in a database row or a logged prompt, privacy has broken.
  */
 
+// Keyed by member id, which already differs per device slot, so two tabs on one
+// laptop never share a purchase list.
 const keyFor = (memberId: string, month: string) =>
   `branches.private-purchases.${memberId}.${month}`;
 

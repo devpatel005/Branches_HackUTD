@@ -4,10 +4,12 @@ import { useRouter } from 'expo-router';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
 import {
+  Avatar,
   Body,
   Button,
   Caption,
   Field,
+  Hero,
   Loading,
   Notice,
   ProgressPill,
@@ -19,10 +21,12 @@ import {
 import {
   memberColor,
   shouldShowLoading,
+  useHousehold,
   useHouseholdMembers,
   useMyItems,
   useProgress,
 } from '../../src/household';
+import { deviceSlotLabel } from '../../src/device-slot';
 import { KIND_LABELS, KIND_ORDER, perMonth } from '../../src/format';
 import { colors, space, type as typeScale } from '../../src/theme';
 
@@ -41,6 +45,7 @@ export default function ConfirmScreen() {
   const { items, ready } = useMyItems();
   const progress = useProgress();
   const members = useHouseholdMembers();
+  const household = useHousehold();
 
   const seedMockData = useReducer(reducers.seedMockData);
   const runInference = useReducer(reducers.runInference);
@@ -76,19 +81,21 @@ export default function ConfirmScreen() {
           don't have to type them in.
         </Body>
         {bothJoined ? (
-          <Button
-            label={busy ? 'Looking…' : 'Load demo household'}
-            onPress={loadDemo}
-            disabled={busy}
-          />
+          <>
+            <Button
+              label={busy ? 'Looking…' : 'Load demo household'}
+              onPress={loadDemo}
+              disabled={busy}
+            />
+            {error ? <Notice tone="warn">{error}</Notice> : null}
+            <Notice>
+              Dev only. Seeds the deterministic Test Household A fixture from 11 Mock Data and
+              runs inference.
+            </Notice>
+          </>
         ) : (
-          <Notice>Waiting for your partner to join before we read both sides.</Notice>
+          <WaitingForPartner joinCode={household?.joinCode} />
         )}
-        {error ? <Notice tone="warn">{error}</Notice> : null}
-        <Notice>
-          Dev only. Seeds the deterministic Test Household A fixture from 11 Mock Data and runs
-          inference.
-        </Notice>
       </Screen>
     );
   }
@@ -143,6 +150,46 @@ export default function ConfirmScreen() {
         <Button label="Next" onPress={() => router.push('/onboarding/gaps')} />
       )}
     </Screen>
+  );
+}
+
+/**
+ * A solo member used to land here with nothing to do and no way to find their
+ * join code again — the code only ever appeared on Welcome, which the route
+ * gate skips once you are a member. So it lives here too.
+ */
+function WaitingForPartner({ joinCode }: { joinCode?: string }) {
+  const members = useHouseholdMembers();
+  const slot = deviceSlotLabel();
+
+  return (
+    <View style={styles.waiting}>
+      {joinCode ? <Hero value={joinCode} caption="Share this join code" /> : null}
+      <Body dim>
+        Both of you need to be here before we read both sides of the plan.
+      </Body>
+
+      <View style={styles.waitingAvatars}>
+        {members.map(m => (
+          <Avatar
+            key={String(m.id)}
+            name={m.displayName}
+            color={memberColor(m.colorKey)}
+            online={m.online}
+            size={40}
+          />
+        ))}
+      </View>
+      <Caption>Waiting for your partner…</Caption>
+
+      <Notice>
+        Testing on one laptop? Browser tabs share storage, so a second tab would
+        connect as you. Open{' '}
+        <Text style={styles.code}>?device=b</Text> for an independent identity —
+        e.g. http://localhost:8081/?device=b — or use an incognito window.
+        {slot ? ` This tab is ${slot}.` : ''}
+      </Notice>
+    </View>
   );
 }
 
@@ -269,4 +316,7 @@ const styles = StyleSheet.create({
     paddingVertical: space.md,
   },
   editActions: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  waiting: { marginTop: space.lg },
+  waitingAvatars: { flexDirection: 'row', gap: space.sm, marginTop: space.lg, marginBottom: space.sm },
+  code: { color: colors.accent, fontWeight: '600' },
 });

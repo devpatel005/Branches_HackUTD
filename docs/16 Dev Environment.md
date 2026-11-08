@@ -91,6 +91,31 @@ Local stays the day-to-day loop: instant republish, no network, and nothing
 listens on a port the firewall cares about. Maincloud is for phone testing and
 the demo.
 
+## Running two identities on one laptop
+**Browser tabs do not get separate identities.** AsyncStorage on web is
+`localStorage`, which is scoped to the origin, not the tab — so a second tab
+loads the first tab's SpacetimeDB token and connects as the **same member**. The
+household never reaches two members, and onboarding stalls with nothing to do.
+
+Two ways to hold two identities:
+
+| Approach | How |
+|---|---|
+| **Device slot** (easiest) | `http://localhost:8081/` is partner A, `http://localhost:8081/?device=b` is partner B |
+| Incognito / second browser profile | Its own `localStorage`, so it works with no query param |
+
+The slot is latched into **`sessionStorage`** (per-tab, survives reloads) rather
+than re-read from the URL, because `router.replace()` strips the query string —
+re-reading it would silently fall back to the shared key and recreate the
+collision.
+
+This matters beyond onboarding: [[Stage 7 - Live Planning Session]] needs two
+people selecting, tuning and ready-checking at the same time, and the
+[[12 Verification#V6 Real-time checklist]] is written for two devices.
+
+The join code is shown on the "waiting for your partner" screen as well as on
+Welcome, so a solo member can always find it again.
+
 ## Gotcha: the host in `apps/mobile/.env`
 This has cost time twice, so it is worth stating plainly.
 

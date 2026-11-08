@@ -7,11 +7,21 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
  * AsyncStorage, not localStorage: localStorage does not exist in React Native,
  * and AsyncStorage works on native *and* web (14 Research Notes#SpacetimeDB).
  */
-const KEY = 'branches.spacetime.token';
+import { deviceSlot } from './device-slot.ts';
+
+/**
+ * The storage key is namespaced by device slot, so `?device=b` on web holds a
+ * second, independent identity on the same machine. Without this, two browser
+ * tabs share one localStorage and therefore one identity — see device-slot.ts.
+ */
+function key(): string {
+  const slot = deviceSlot();
+  return slot ? `branches.spacetime.token.${slot}` : 'branches.spacetime.token';
+}
 
 export async function loadToken(): Promise<string | undefined> {
   try {
-    return (await AsyncStorage.getItem(KEY)) ?? undefined;
+    return (await AsyncStorage.getItem(key())) ?? undefined;
   } catch {
     // A broken store must not block the app from connecting fresh.
     return undefined;
@@ -20,7 +30,7 @@ export async function loadToken(): Promise<string | undefined> {
 
 export async function saveToken(token: string): Promise<void> {
   try {
-    await AsyncStorage.setItem(KEY, token);
+    await AsyncStorage.setItem(key(), token);
   } catch {
     // Non-fatal: the identity just won't survive a reload.
   }
@@ -28,7 +38,7 @@ export async function saveToken(token: string): Promise<void> {
 
 export async function clearToken(): Promise<void> {
   try {
-    await AsyncStorage.removeItem(KEY);
+    await AsyncStorage.removeItem(key());
   } catch {
     /* non-fatal */
   }
