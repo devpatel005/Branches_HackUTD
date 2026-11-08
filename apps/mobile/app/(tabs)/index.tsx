@@ -91,6 +91,7 @@ export default function HomeScreen() {
         // 10 Screens#Home: the primary action opens Chat with the event prompt.
         onSomethingCameUp={() => router.push('/chat')}
         onAddGoal={() => router.push('/timeline')}
+        onOpenWrapped={() => router.push('/wrapped')}
       />
 
       <ShowTheMath

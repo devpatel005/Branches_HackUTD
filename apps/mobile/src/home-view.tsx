@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Svg from 'react-native-svg';
+import { Flower } from './branch-art';
 import { Button, useTopBleed } from './components';
+import { Icon } from './icons';
 import { ProjectionChart, type ChartMarker, type ChartPoint } from './chart';
 import { ForestCanopy, Station } from './forest';
 import { Pulse } from './pulse';
@@ -46,6 +49,8 @@ export type HomeViewProps = {
   onOpenGoal: (key: string) => void;
   onSomethingCameUp: () => void;
   onAddGoal: () => void;
+  /** The year-in-review pages. Hidden when not provided. */
+  onOpenWrapped?: () => void;
 };
 
 export function HomeView(props: HomeViewProps) {
@@ -258,6 +263,24 @@ export function HomeView(props: HomeViewProps) {
     </View>
   );
 
+  const wrapped = props.onOpenWrapped ? (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel="Open your 2026, wrapped: seven pages on your year together"
+      onPress={props.onOpenWrapped}
+      style={({ pressed }) => [styles.wrapped, pressed && styles.pressed]}
+    >
+      <Svg width={30} height={36}>
+        <Flower x={15} y={30} size={0.95} />
+      </Svg>
+      <View style={styles.wrappedText}>
+        <Text style={styles.wrappedTitle}>Your 2026, wrapped</Text>
+        <Text style={styles.wrappedMeta}>Seven pages on your year together</Text>
+      </View>
+      <Icon name="forward" size={20} color={colors.ink2} />
+    </Pressable>
+  ) : null;
+
   // One column, phone first (10 Screens). On web the same column is centred.
   return (
     <View>
@@ -265,6 +288,7 @@ export function HomeView(props: HomeViewProps) {
       {hero}
       {chart}
       {stats}
+      {wrapped}
       {goals}
       {action}
     </View>
@@ -378,6 +402,21 @@ const styles = StyleSheet.create({
   },
   statValue: { ...typeScale.numeral, fontSize: 24, lineHeight: 28, color: colors.ink },
   statWords: { ...typeScale.caption, color: colors.ink2, marginTop: 2 },
+
+  wrapped: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingVertical: space.md,
+    paddingHorizontal: space.md,
+    marginBottom: space.xxl,
+    borderWidth: line.hair,
+    borderColor: colors.ruleStrong,
+    borderRadius: 6,
+  },
+  wrappedText: { flex: 1 },
+  wrappedTitle: { ...typeScale.headline, color: colors.ink },
+  wrappedMeta: { ...typeScale.caption, color: colors.ink2, marginTop: 2 },
 
   goals: { marginBottom: space.xxl },
   goalsHead: {
