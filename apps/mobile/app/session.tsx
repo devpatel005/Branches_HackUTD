@@ -165,9 +165,19 @@ export default function SessionScreen() {
   if (committed) {
     const chosen = branches.find(b => b.id === session.committedBranchId);
     return (
-      <Screen>
+      // Own key: open at the top, so the celebration is in view.
+      <Screen key="committed">
         <TitleBand plate="Planning session · Done" title="This is your plan now.">
-          <BranchPaths lanes={[{ color: colors.accent, chosen: true }]} merged height={90} />
+          {/* The decision, replayed: the chosen branch regrows and blooms while the
+              others fade. Falls back to a single branch if the paths are gone. */}
+          {chosen && branches.length > 0 ? (
+            <BranchPaths
+              lanes={branches.map(b => ({ color: b.id === chosen.id ? colors.accent : colors.ink3, chosen: b.id === chosen.id }))}
+              celebrate={branches.findIndex(b => b.id === chosen.id)}
+            />
+          ) : (
+            <BranchPaths lanes={[{ color: colors.accent, chosen: true }]} merged height={90} />
+          )}
         </TitleBand>
         {chosen ? (
           <>

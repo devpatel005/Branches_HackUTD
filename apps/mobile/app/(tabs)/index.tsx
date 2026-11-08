@@ -69,6 +69,8 @@ export default function HomeScreen() {
             // Label with the target month so it matches the goal rows below
             // (the station sits on the settle month, the deposit before it).
             dateStr: monthLabel(goals.find(x => String(x.id) === g.id)?.targetMonth ?? g.settleMonth + 1),
+            cost: g.inflatedCost,
+            shortfall: g.funded ? undefined : g.shortfall,
             atRisk: !g.funded,
           })) ?? []
         }

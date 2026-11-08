@@ -123,8 +123,44 @@ export function HomeView(props: HomeViewProps) {
     </Pulse>
   );
 
+  // While dragging: what happens in the month under your finger, in words.
+  // Every number here is engine output (savings at that month, a goal's cost
+  // or shortfall); nothing is computed.
+  const scrubCard = (() => {
+    if (!scrub) return null;
+    const when = props.monthLabel(scrub.month);
+    const here = props.markers.find(m => Math.abs(m.month - scrub.month) <= 1);
+    if (here) {
+      // Name the goal's own date, not the neighbouring month under the finger.
+      const when = here.dateStr ?? props.monthLabel(here.month);
+      return here.atRisk
+        ? {
+            title: `${when}: ${here.label} is due`,
+            body: here.shortfall !== undefined ? `It falls ${dollars(Math.round(here.shortfall * 100), { showCents: true })} short.` : "It doesn't fit yet.",
+            tone: colors.error,
+          }
+        : {
+            title: `${when}: ${here.label} paid`,
+            body: here.cost !== undefined ? `${dollars(Math.round(here.cost * 100), { showCents: true })} from your savings.` : 'Paid from your savings.',
+            tone: colors.accent,
+          };
+    }
+    const next = props.markers.filter(m => m.month > scrub.month).sort((a, b) => a.month - b.month)[0];
+    return {
+      title: `${when}: ${dollars(Math.round(scrub.value * 100))} saved`,
+      body: next ? `Next up: ${next.label}, ${next.dateStr ?? props.monthLabel(next.month)}.` : 'Every goal is behind you.',
+      tone: colors.ink2,
+    };
+  })();
+
   const chart = (
     <View style={styles.chart}>
+      {scrubCard ? (
+        <View pointerEvents="none" style={[styles.scrubCard, { borderLeftColor: scrubCard.tone }]} accessibilityLiveRegion="polite">
+          <Text style={styles.scrubTitle}>{scrubCard.title}</Text>
+          <Text style={styles.scrubBody}>{scrubCard.body}</Text>
+        </View>
+      ) : null}
       <ProjectionChart
         points={props.points}
         markers={props.markers}
@@ -306,7 +342,23 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
 
-  chart: { marginBottom: space.xl },
+  chart: { marginBottom: space.xl, position: 'relative' },
+  scrubCard: {
+    position: 'absolute',
+    top: -8,
+    left: 0,
+    right: 40,
+    zIndex: 3,
+    backgroundColor: colors.band,
+    borderWidth: line.hair,
+    borderColor: colors.ruleStrong,
+    borderLeftWidth: 3,
+    borderRadius: 6,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+  },
+  scrubTitle: { fontFamily: fonts.textSemi, fontSize: 14, lineHeight: 19, color: colors.ink },
+  scrubBody: { ...typeScale.caption, color: colors.ink2, marginTop: 2 },
 
   stats: {
     flexDirection: 'row',

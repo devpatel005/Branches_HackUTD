@@ -15,7 +15,16 @@ import { colors, fonts, line, space, type as typeScale } from './theme';
  */
 
 export type ChartPoint = { month: number; value: number };
-export type ChartMarker = { month: number; label: string; atRisk: boolean; dateStr?: string };
+export type ChartMarker = {
+  month: number;
+  label: string;
+  atRisk: boolean;
+  dateStr?: string;
+  /** Engine: the goal's cost on its date (inflated), in dollars. */
+  cost?: number;
+  /** Engine: how far short it falls, in dollars, when it doesn't fit. */
+  shortfall?: number;
+};
 
 const HEIGHT = 176;
 const PAD_TOP = 34;

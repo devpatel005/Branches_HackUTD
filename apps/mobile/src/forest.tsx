@@ -271,6 +271,7 @@ export function BranchPaths({
   height = 120,
   merged = false,
   wilt = false,
+  celebrate,
 }: {
   lanes: readonly Lane[];
   height?: number;
@@ -279,11 +280,21 @@ export function BranchPaths({
   merged?: boolean;
   /** Also draw the "no change" path: a dead twig ending in a wilted flower. */
   wilt?: boolean;
+  /**
+   * The plan was just committed to this lane: it regrows and bursts into
+   * bloom while the other branches fade away.
+   */
+  celebrate?: number;
 }) {
   const [width, setWidth] = useState(0);
   const n = Math.max(1, lanes.length);
-  const tokens = lanes.map(l => `${l.chosen ? 'c' : 'u'}:${l.color}`);
-  const grow = useGrowth(merged ? ['merged'] : tokens);
+  const celebrating = celebrate !== undefined && !merged;
+  const tokens = celebrating
+    ? lanes.map((_, i) => (i === celebrate ? 'celebrate' : 'settled'))
+    : lanes.map(l => `${l.chosen ? 'c' : 'u'}:${l.color}`);
+  const grow = useGrowth(merged ? ['merged'] : tokens, celebrating ? 1100 : 750);
+  // The branches not chosen fade out over the first second of the celebration.
+  const fade = useGrowth(celebrating ? ['fade'] : [], 900, 0)[0] ?? 0;
 
   const H = height;
   const trunkY = H * 0.72;
@@ -310,7 +321,7 @@ export function BranchPaths({
       {width > 0 ? (
         <Svg width={width} height={H}>
           {/* The "no change" path: a dead twig, dotted, ending in a wilted flower. */}
-          {wilt && !merged ? (
+          {wilt && !merged && !celebrating ? (
             <G>
               <Path
                 d={`M${forkX},${trunkY} C${forkX + 50},${trunkY + 6} ${forkX + 110},${H - 12} ${Math.min(endX - 30, forkX + 160)},${H - 8}`}
@@ -324,8 +335,14 @@ export function BranchPaths({
             </G>
           ) : null}
 
-          {(merged ? [{ color: colors.accent, chosen: true }] : lanes).map((lane, i) => {
-            const p = Math.max(0, Math.min(1, grow[i] ?? 1));
+          {(merged ? [{ color: colors.accent, chosen: true }] : lanes)
+            .map((lane, i) => ({ lane, i }))
+            // The celebrated branch is drawn last, on top of the fading ones.
+            .sort((a, b) => (a.i === celebrate ? 1 : 0) - (b.i === celebrate ? 1 : 0))
+            .map(({ lane, i }) => {
+            const isWinner = celebrating && i === celebrate;
+            const p = celebrating && !isWinner ? 1 : Math.max(0, Math.min(1, grow[i] ?? 1));
+            const opacity = celebrating && !isWinner ? Math.max(0.06, 1 - fade) : 1;
             const ly = laneY(i);
             const full = cubic(
               [forkX - 2, trunkY - 2],
@@ -337,9 +354,10 @@ export function BranchPaths({
             const shown = full.slice(0, Math.max(2, Math.round(p * (full.length - 1)) + 1));
             const tip = shown[shown.length - 1]!;
             const twigAt = full[Math.round(full.length * 0.62)]!;
-            const topLine = lane.chosen ? lane.color : undefined;
+            const topLine = isWinner ? colors.accent : lane.chosen ? lane.color : undefined;
+            const bloom = isWinner ? Math.max(0, (p - 0.8) / 0.2) : 0;
             return (
-              <G key={i}>
+              <G key={i} opacity={opacity}>
                 {p > 0.7 ? <Twig x={twigAt[0]} y={twigAt[1] - 1} dir={i % 2 === 0 ? 1 : -1} size={0.75} /> : null}
                 <BarkBranch
                   spine={shown}
@@ -348,7 +366,14 @@ export function BranchPaths({
                   fill={i % 2 === 1 ? BARK.dark : BARK.mid}
                   topLine={topLine}
                 />
-                <Flower x={tip[0]} y={tip[1] - 1} size={0.8} open={Math.max(0, (p - 0.75) / 0.25)} />
+                <Flower x={tip[0]} y={tip[1] - 1} size={isWinner ? 1.05 : 0.8} open={Math.max(0, (p - 0.75) / 0.25)} />
+                {/* The winning branch bursts into a small cluster of blooms. */}
+                {isWinner && bloom > 0
+                  ? [0.62, 0.78, 0.9].map((at, k) => {
+                      const q = full[Math.round(at * (full.length - 1))]!;
+                      return <Flower key={`b${k}`} x={q[0]} y={q[1] - 2} size={0.6} open={Math.min(1, bloom * (1.3 - k * 0.15))} />;
+                    })
+                  : null}
               </G>
             );
           })}

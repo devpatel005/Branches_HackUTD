@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, Animated, Easing, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Circle, Path } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
 import { Icon } from './icons';
@@ -22,6 +23,9 @@ import { colors, fonts, space, type as typeScale } from './theme';
 
 /** OPEN(OD-6): 1.5 seconds. */
 export const HOLD_MS = 1500;
+
+/** Set once this device has completed a hold, so the first-time hint stops showing. */
+const HINT_KEY = 'branches.ready-hint-seen';
 
 const SIZE = 180;
 const STROKE = 10;
@@ -87,6 +91,23 @@ export function ReadyRing({
   const lastTick = useRef(0);
   const reported = useRef(false);
 
+  // First-time hint: nobody guesses "hold for 1.5 seconds". Shown until this
+  // device has completed one hold, then never again.
+  const [hintSeen, setHintSeen] = useState(true);
+  useEffect(() => {
+    AsyncStorage.getItem(HINT_KEY)
+      .then(v => setHintSeen(v === '1'))
+      .catch(() => setHintSeen(false));
+  }, []);
+
+  // A gentle breathing halo while the ring is waiting for a hold. Off under
+  // reduce-motion, while holding, and once committed.
+  const halo = useRef(new Animated.Value(0)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => undefined);
+  }, []);
+
   const stop = () => {
     if (frame.current) clearInterval(frame.current);
     frame.current = null;
@@ -129,6 +150,10 @@ export function ReadyRing({
       if (next >= 1 && !reported.current) {
         reported.current = true;
         onReady(true);
+        if (!hintSeen) {
+          setHintSeen(true);
+          AsyncStorage.setItem(HINT_KEY, '1').catch(() => undefined);
+        }
       }
     }, 40);
   };
@@ -138,27 +163,81 @@ export function ReadyRing({
   const waitingFor = others.filter(m => !m.ready);
   const everyoneReady = members.length > 0 && members.every(m => m.ready);
 
+  // A partner's `ready` is only true while they are physically holding (letting
+  // go sends ready=false), so it is shown live as "is holding".
+  const holdingOthers = others.filter(m => m.ready);
+  const iAmHolding = progress > 0;
+  const names = (list: readonly RingMember[]) => list.map(m => m.name).join(' and ');
+
   const caption = committed
     ? 'This is your plan now'
     : disabledReason
       ? disabledReason
       : everyoneReady
         ? 'Keep holding…'
-        : reported.current && waitingFor.length > 0
-          ? `${waitingFor.map(m => m.name).join(' and ')} — your turn`
-          : others.some(m => m.ready)
-            ? `${others.filter(m => m.ready).map(m => m.name).join(' and ')} is ready — hold to agree`
+        : iAmHolding && waitingFor.length > 0
+          ? `Keep holding. Waiting for ${names(waitingFor)} to hold too.`
+          : holdingOthers.length > 0
+            ? 'Press and hold to agree.'
             : 'Press and hold together';
+
+  const waiting = !committed && !disabledReason && !iAmHolding;
+  useEffect(() => {
+    if (!waiting || reduceMotion) {
+      halo.stopAnimation();
+      halo.setValue(0);
+      return;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(halo, { toValue: 1, duration: 1400, easing: Easing.inOut(Easing.sin), useNativeDriver: Platform.OS !== 'web' }),
+        Animated.timing(halo, { toValue: 0, duration: 1400, easing: Easing.inOut(Easing.sin), useNativeDriver: Platform.OS !== 'web' }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [waiting, reduceMotion, halo]);
 
   return (
     <View style={styles.wrapper}>
+      {!hintSeen && !committed && !disabledReason ? (
+        <Text style={styles.hint}>
+          Press and hold the ring for 1.5 seconds. It becomes your plan when you're both holding at the
+          same time.
+        </Text>
+      ) : null}
+
+      {/* Live: who is holding right now, in their colour. */}
+      {!committed && holdingOthers.length > 0 ? (
+        <View style={styles.liveRow} accessibilityLiveRegion="polite">
+          {holdingOthers.map(m => (
+            <View key={m.memberId} style={[styles.liveDot, { backgroundColor: m.colour }]} />
+          ))}
+          <Text style={styles.liveText}>
+            <Text style={{ color: holdingOthers[0]!.colour }}>{names(holdingOthers)}</Text>
+            {holdingOthers.length > 1 ? ' are holding' : ' is holding'}
+          </Text>
+        </View>
+      ) : null}
+
+      <View style={styles.touch}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.halo,
+            {
+              opacity: halo.interpolate({ inputRange: [0, 1], outputRange: [0.15, 0.55] }),
+              transform: [{ scale: halo.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1.05] }) }],
+            },
+          ]}
+        />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`Hold to make ${branchName} our plan`}
         onPressIn={start}
         onPressOut={stop}
         disabled={Boolean(disabledReason) || committed}
-        style={styles.touch}
+        style={styles.touchInner}
       >
         <Svg width={SIZE} height={SIZE}>
           <Circle
@@ -199,6 +278,7 @@ export function ReadyRing({
           </Text>
         </View>
       </Pressable>
+      </View>
 
       <Text style={[styles.caption, committed && { color: colors.accent }]}>{caption}</Text>
 
@@ -228,6 +308,27 @@ export function ReadyRing({
 
 const styles = StyleSheet.create({
   wrapper: { alignItems: 'center', marginTop: space.lg },
+  hint: {
+    ...typeScale.caption,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.ink,
+    textAlign: 'center',
+    maxWidth: 300,
+    marginBottom: space.md,
+  },
+  liveRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: space.sm },
+  liveDot: { width: 8, height: 8, borderRadius: 4 },
+  liveText: { fontFamily: fonts.textSemi, fontSize: 15, color: colors.ink },
+  halo: {
+    position: 'absolute',
+    width: SIZE + 18,
+    height: SIZE + 18,
+    borderRadius: (SIZE + 18) / 2,
+    borderWidth: 2,
+    borderColor: colors.accent,
+  },
+  touchInner: { width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' },
   touch: { width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' },
   label: { position: 'absolute', alignItems: 'center', paddingHorizontal: space.lg },
   labelTitle: { fontFamily: fonts.numeral, fontSize: 34, lineHeight: 40, color: colors.ink },
