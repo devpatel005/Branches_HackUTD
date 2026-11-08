@@ -120,6 +120,17 @@ function answerFor(body: Body): { name: string; args: unknown } | null {
   }
 }
 
+/** A plain-text answer for text-only tasks like `explain`. */
+function textAnswerFor(body: Body): string {
+  const userText = body.messages?.filter(m => m.role === 'user').map(m => m.content).join('\n') ?? '';
+  const data = extractEngineData(userText);
+  const engineData = (data?.engineData ?? {}) as Record<string, unknown>;
+  const branchName = typeof engineData.branchName === 'string' ? engineData.branchName : 'that path';
+  if (process.env.MOCK_ADVICE === '1') return `You should stick with ${branchName}.`;
+  if (process.env.MOCK_INVENT_NUMBER === '1') return `${branchName} saves you $999 a month.`;
+  return `With ${branchName}, the projection funds your goals.`;
+}
+
 /** Candidates, wherever the context put them. */
 function candidatesFrom(data: Record<string, unknown> | null): { candidateId: string }[] {
   const engineData = data?.engineData as Record<string, unknown> | undefined;
@@ -208,7 +219,8 @@ const server = createServer((request, response) => {
       return;
     }
 
-    const answer = answerFor(body);
+    const hasTools = (body.tools?.length ?? 0) > 0;
+    const answer = hasTools ? answerFor(body) : null;
     const message: Record<string, unknown> = answer
       ? {
           role: 'assistant',
@@ -221,7 +233,7 @@ const server = createServer((request, response) => {
             },
           ],
         }
-      : { role: 'assistant', content: 'The projection is unchanged.' };
+      : { role: 'assistant', content: hasTools ? 'The projection is unchanged.' : textAnswerFor(body) };
 
     // Thinking-on behaviour, for testing that the service notices.
     if (process.env.MOCK_THINKING === '1') message.reasoning_content = 'thinking...';

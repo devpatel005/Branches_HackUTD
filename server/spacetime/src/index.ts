@@ -340,7 +340,21 @@ export const onConnect = spacetimedb.clientConnected(ctx => {
 
 export const onDisconnect = spacetimedb.clientDisconnected(ctx => {
   const m = ctx.db.member.identity.find(ctx.sender);
-  if (m) ctx.db.member.id.update({ ...m, online: false, lastSeenAt: ctx.timestamp });
+  if (!m) return;
+  ctx.db.member.id.update({ ...m, online: false, lastSeenAt: ctx.timestamp });
+
+  // Session presence has to go too, or a closed laptop would still count as
+  // "present" and the ready check could commit without them
+  // (08 Live Session Spec#Presence: absent within ~5 seconds).
+  const inSession = ctx.db.sessionMember.memberId.find(m.id);
+  if (inSession?.present) {
+    ctx.db.sessionMember.memberId.update({
+      ...inSession,
+      present: false,
+      ready: false,
+      readyAt: undefined,
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -765,6 +779,12 @@ export const reseedHousehold = spacetimedb.reducer(ctx => {
     }
     for (const row of [...ctx.db.constraint.sessionId.filter(sessionRow.id)]) {
       ctx.db.constraint.id.delete(row.id);
+    }
+    for (const row of [...ctx.db.reaction.sessionId.filter(sessionRow.id)]) {
+      ctx.db.reaction.id.delete(row.id);
+    }
+    for (const row of [...ctx.db.sessionMember.sessionId.filter(sessionRow.id)]) {
+      ctx.db.sessionMember.memberId.delete(row.memberId);
     }
     ctx.db.session.id.delete(sessionRow.id);
   }
@@ -1369,6 +1389,34 @@ export const setAssumptions = spacetimedb.reducer(
 /** How many named branches the couple sees at once (06 Engine Spec). */
 const BRANCHES_SHOWN = 3;
 
+/**
+ * The people in a household. Excludes the agent.
+ *
+ * This matters for the ready check: the agent is a `member` row with role
+ * `agent`, so counting every row would mean a commit could never happen —
+ * the agent has no hands to hold a button with.
+ */
+function humanMembers(ctx: Ctx, householdId: bigint) {
+  return [...ctx.db.member.householdId.filter(householdId)]
+    .filter(m => m.role === 'member')
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+}
+
+/**
+ * Clear every ready flag in a session.
+ *
+ * Called by anything that changes what is on the table — a new selection,
+ * tuning, a lock, a pin, a reroll (08 Live Session Spec#Ready check). Without
+ * this, two people could commit a branch that silently changed underneath them
+ * after they agreed to it.
+ */
+function clearReady(ctx: Ctx, sessionId: bigint): void {
+  for (const row of [...ctx.db.sessionMember.sessionId.filter(sessionId)]) {
+    if (!row.ready) continue;
+    ctx.db.sessionMember.memberId.update({ ...row, ready: false, readyAt: undefined });
+  }
+}
+
 function openSessionFor(ctx: Ctx, householdId: bigint) {
   return [...ctx.db.session.householdId.filter(householdId)].find(x => x.status === 'open');
 }
@@ -1481,6 +1529,7 @@ function writeCandidatesAndBranches(
       summary: named.summary,
       nameSource: 'template',
       position: index,
+      tunedBy: undefined,
     });
   });
 }
@@ -1508,6 +1557,29 @@ export const startSession = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { ev
     startedAt: ctx.timestamp,
   });
 
+  // Enrol the starter immediately: their partner's invite banner keys off a
+  // session they are not yet a member of.
+  const existingMembership = ctx.db.sessionMember.memberId.find(caller.id);
+  if (existingMembership) {
+    ctx.db.sessionMember.memberId.update({
+      ...existingMembership,
+      sessionId: created.id,
+      present: true,
+      selectedBranchId: undefined,
+      ready: false,
+      readyAt: undefined,
+    });
+  } else {
+    ctx.db.sessionMember.insert({
+      memberId: caller.id,
+      sessionId: created.id,
+      present: true,
+      selectedBranchId: undefined,
+      ready: false,
+      readyAt: undefined,
+    });
+  }
+
   postMessage(ctx, caller.householdId, {
     kind: 'system',
     text: 'Looking for paths forward…',
@@ -1527,6 +1599,7 @@ export const generateCandidates = spacetimedb.reducer(
       generateCandidatesWithEngine(input, { constraints: constraintsFor(ctx, sessionId) })
     );
     writeCandidatesAndBranches(ctx, sessionRow, candidates, 0);
+    clearReady(ctx, sessionId);
   }
 );
 
@@ -1564,6 +1637,7 @@ export const reroll = spacetimedb.reducer({ sessionId: t.u64() }, (ctx, { sessio
     return;
   }
   writeCandidatesAndBranches(ctx, sessionRow, candidates, batch);
+  clearReady(ctx, sessionId);
 });
 
 export const addConstraint = spacetimedb.reducer(
@@ -1594,6 +1668,7 @@ export const addConstraint = spacetimedb.reducer(
       target: JSON.stringify(parsed),
       active: true,
     });
+    clearReady(ctx, sessionId);
   }
 );
 
@@ -1606,6 +1681,7 @@ export const removeConstraint = spacetimedb.reducer(
     sessionOrReject(ctx, existing.sessionId, caller.householdId);
     if (existing.memberId !== caller.id) throw new SenderError('that is not yours to remove');
     ctx.db.constraint.id.update({ ...existing, active: false });
+    clearReady(ctx, existing.sessionId);
   }
 );
 
@@ -1637,6 +1713,7 @@ export const requestBridge = spacetimedb.reducer(
           0
         ) + 1;
       writeCandidatesAndBranches(ctx, sessionRow, bridges, batch);
+      clearReady(ctx, sessionId);
       return;
     }
 
@@ -1735,14 +1812,19 @@ export const tuneLever = spacetimedb.reducer(
     ctx.db.branch.id.update({
       ...branchRow,
       summary: templateSummary(stats, id => goalTitles.get(id) ?? id),
-      name: `${branchRow.name.replace(/ · tuned$/, '')} · tuned`,
+      name: branchRow.name.replace(/ · tuned$/, ''),
+      tunedBy: caller.id,
     });
+
+    // Any change to a branch clears every ready flag
+    // (08 Live Session Spec#Live tuning).
+    clearReady(ctx, branchRow.sessionId);
   }
 );
 
 /**
- * Commit a branch — the temporary single-user confirm Stage 7 replaces with the
- * ready check.
+ * Apply a branch to the plan. Internal — reached only through the ready check
+ * (or the dev override below).
  *
  * Applies the levers, marks the event applied and recomputes the plan, all in
  * one transaction (05 Data Model#Rules).
@@ -1755,16 +1837,20 @@ export const tuneLever = spacetimedb.reducer(
  *  - **saveMore** becomes a `plan_commitment`, not an edit to the inferred
  *    baseline — the baseline means "what we observed", this means "what we
  *    decided".
+ *
+ * Idempotent: a session already committed does nothing, so two simultaneous
+ * `setReady` calls cannot apply the same branch twice
+ * (08 Live Session Spec#Edge cases).
  */
-export const commitBranch = spacetimedb.reducer({ branchId: t.u64() }, (ctx, { branchId }) => {
-  const caller = requireHuman(ctx);
+function applyBranch(ctx: Ctx, branchId: bigint, actorId: bigint): boolean {
   const branchRow = ctx.db.branch.id.find(branchId);
   if (!branchRow) throw new SenderError('branch not found');
-  const sessionRow = sessionOrReject(ctx, branchRow.sessionId, caller.householdId);
-  if (sessionRow.status !== 'open') throw new SenderError('this session is already settled');
+  const sessionRow = ctx.db.session.id.find(branchRow.sessionId);
+  if (!sessionRow) throw new SenderError('session not found');
+  if (sessionRow.status !== 'open') return false;
+
   const candidate = ctx.db.branchCandidate.id.find(branchRow.candidateId);
   if (!candidate) throw new SenderError('candidate not found');
-
   const levers = JSON.parse(candidate.levers) as Levers;
 
   for (const goal of [...ctx.db.goal.householdId.filter(sessionRow.householdId)]) {
@@ -1795,13 +1881,214 @@ export const commitBranch = spacetimedb.reducer({ branchId: t.u64() }, (ctx, { b
 
   ctx.db.session.id.update({ ...sessionRow, status: 'committed', committedBranchId: branchId });
 
-  recomputeProjection(ctx, sessionRow.householdId, caller.id);
+  recomputeProjection(ctx, sessionRow.householdId, actorId);
 
   postMessage(ctx, sessionRow.householdId, {
     kind: 'system',
     text: `This is your plan now: ${branchRow.name}.`,
     refId: sessionRow.id,
   });
+
+  // The agent writes the one-line summary (08 Live Session Spec). If no agent is
+  // running the system line above already stands on its own.
+  queueJob(ctx, sessionRow.householdId, {
+    kind: 'explain',
+    input: {
+      what: 'committed-branch',
+      branchName: branchRow.name,
+      branchSummary: branchRow.summary,
+      stats: JSON.parse(candidate.stats) as unknown,
+    },
+    sessionId: sessionRow.id,
+  });
+
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// The live session (Stage 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a member must hold before the client reports ready. OPEN(OD-6).
+ *
+ * Not exported: a SpacetimeDB module reserves named runtime exports for values
+ * registered with it — reducers, lifecycle hooks, views, visibility filters.
+ * Exporting a plain constant fails schema inspection with "exporting something
+ * that is not a spacetime export", and only `spacetime generate` catches it;
+ * `build` and `publish` both accept it silently.
+ */
+const READY_HOLD_MS = 1500;
+void READY_HOLD_MS;
+
+function sessionMemberRow(ctx: Ctx, sessionId: bigint, memberId: bigint) {
+  const row = ctx.db.sessionMember.memberId.find(memberId);
+  return row && row.sessionId === sessionId ? row : undefined;
+}
+
+/**
+ * Open the session on this device. Presence is per-member, so joining twice is
+ * harmless and a reconnect restores it.
+ */
+export const joinSession = spacetimedb.reducer({ sessionId: t.u64() }, (ctx, { sessionId }) => {
+  const caller = requireHuman(ctx);
+  sessionOrReject(ctx, sessionId, caller.householdId);
+
+  const existing = ctx.db.sessionMember.memberId.find(caller.id);
+  if (existing) {
+    ctx.db.sessionMember.memberId.update({
+      ...existing,
+      sessionId,
+      present: true,
+      // Moving to a different session clears a stale pick.
+      selectedBranchId: existing.sessionId === sessionId ? existing.selectedBranchId : undefined,
+      ready: false,
+      readyAt: undefined,
+    });
+    return;
+  }
+  ctx.db.sessionMember.insert({
+    memberId: caller.id,
+    sessionId,
+    present: true,
+    selectedBranchId: undefined,
+    ready: false,
+    readyAt: undefined,
+  });
+});
+
+/**
+ * Close the session screen. Selections, locks and pins stay — only presence and
+ * the ready flag go (08 Live Session Spec#Edge cases).
+ */
+export const leaveSession = spacetimedb.reducer({ sessionId: t.u64() }, (ctx, { sessionId }) => {
+  const caller = requireHuman(ctx);
+  const row = sessionMemberRow(ctx, sessionId, caller.id);
+  if (!row) return;
+  ctx.db.sessionMember.memberId.update({
+    ...row,
+    present: false,
+    ready: false,
+    readyAt: undefined,
+  });
+});
+
+/**
+ * Pick a card. Every member's avatar shows on their selected card, on every
+ * screen (08 Live Session Spec#Selection).
+ */
+export const selectBranch = spacetimedb.reducer(
+  { sessionId: t.u64(), branchId: t.u64() },
+  (ctx, { sessionId, branchId }) => {
+    const caller = requireHuman(ctx);
+    sessionOrReject(ctx, sessionId, caller.householdId);
+    const branchRow = ctx.db.branch.id.find(branchId);
+    if (!branchRow || branchRow.sessionId !== sessionId) throw new SenderError('branch not found');
+
+    const row = sessionMemberRow(ctx, sessionId, caller.id);
+    if (!row) throw new SenderError('join the session first');
+
+    ctx.db.sessionMember.memberId.update({
+      ...row,
+      selectedBranchId: branchId,
+      // Changing your mind un-readies everyone, including you.
+      ready: false,
+      readyAt: undefined,
+    });
+    clearReady(ctx, sessionId);
+  }
+);
+
+/** One reaction per member per branch; the latest replaces the last. */
+export const react = spacetimedb.reducer(
+  { sessionId: t.u64(), branchId: t.u64(), emoji: t.string() },
+  (ctx, { sessionId, branchId, emoji }) => {
+    const caller = requireHuman(ctx);
+    sessionOrReject(ctx, sessionId, caller.householdId);
+    if (!['👍', '❤️', '😬'].includes(emoji)) throw new SenderError('unknown reaction');
+
+    for (const existing of [...ctx.db.reaction.sessionId.filter(sessionId)]) {
+      if (existing.memberId === caller.id && existing.branchId === branchId) {
+        ctx.db.reaction.id.delete(existing.id);
+      }
+    }
+    ctx.db.reaction.insert({ id: 0n, sessionId, memberId: caller.id, branchId, emoji });
+  }
+);
+
+/**
+ * The ready check — 08 Live Session Spec#Ready check.
+ *
+ * The client sends `true` only once a press-and-hold has lasted
+ * `READY_HOLD_MS`, and `false` the moment the finger lifts. So both people are
+ * still holding when the commit fires, which is what makes it simultaneous
+ * rather than "both pressed at some point".
+ *
+ * The **server** decides. Inside this one transaction: if every household
+ * member is present, ready, and ready for the *same* branch, the branch is
+ * applied. Two simultaneous calls therefore commit once — the second finds the
+ * session already committed and does nothing.
+ */
+export const setReady = spacetimedb.reducer(
+  { sessionId: t.u64(), ready: t.bool() },
+  (ctx, { sessionId, ready }) => {
+    const caller = requireHuman(ctx);
+    const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
+    if (sessionRow.status !== 'open') return;
+
+    const row = sessionMemberRow(ctx, sessionId, caller.id);
+    if (!row) throw new SenderError('join the session first');
+    if (ready && row.selectedBranchId === undefined) {
+      throw new SenderError('pick a path first');
+    }
+
+    ctx.db.sessionMember.memberId.update({
+      ...row,
+      ready,
+      readyAt: ready ? ctx.timestamp : undefined,
+    });
+    if (!ready) return;
+
+    const members = humanMembers(ctx, sessionRow.householdId);
+    const states = members.map(m => sessionMemberRow(ctx, sessionId, m.id));
+
+    // Everyone in the household, not merely everyone present: a decision this
+    // size should not be possible while a partner is away.
+    if (states.some(state => !state?.present || !state.ready)) return;
+
+    const picks = new Set(states.map(state => String(state!.selectedBranchId)));
+    if (picks.size !== 1) return;
+
+    const branchId = states[0]!.selectedBranchId;
+    if (branchId === undefined) return;
+
+    applyBranch(ctx, branchId, caller.id);
+  }
+);
+
+/**
+ * Commit alone — **development only**.
+ *
+ * The ready check is the real path, and this refuses to run when a second
+ * member is present, so it cannot quietly replace it. It exists so the journey
+ * past a commit can be worked on in one browser tab.
+ */
+export const commitBranchSolo = spacetimedb.reducer({ branchId: t.u64() }, (ctx, { branchId }) => {
+  const caller = requireHuman(ctx);
+  const branchRow = ctx.db.branch.id.find(branchId);
+  if (!branchRow) throw new SenderError('branch not found');
+  const sessionRow = sessionOrReject(ctx, branchRow.sessionId, caller.householdId);
+
+  const others = humanMembers(ctx, sessionRow.householdId).filter(m => m.id !== caller.id);
+  const anyonePresent = others.some(
+    m => sessionMemberRow(ctx, sessionRow.id, m.id)?.present === true
+  );
+  if (anyonePresent) {
+    throw new SenderError('your partner is here — use the ready check');
+  }
+  if (!applyBranch(ctx, branchId, caller.id)) {
+    throw new SenderError('this session is already settled');
+  }
 });
 
 export const closeSession = spacetimedb.reducer({ sessionId: t.u64() }, (ctx, { sessionId }) => {
@@ -1982,48 +2269,65 @@ const BranchPick = t.object('BranchPick', {
   summary: t.string(),
 });
 
-export const nameBranches = spacetimedb.reducer(
-  { sessionId: t.u64(), picks: t.array(BranchPick) },
-  (ctx, { sessionId, picks }) => {
+/**
+ * Name **one** branch and put it on screen at `position`.
+ *
+ * One call per branch, not one call for three: 08 Live Session Spec wants cards
+ * to arrive one at a time, with "Building branch 2 of 3..." meaning something.
+ * Writing all three in a single transaction would make both partners see them
+ * land together and reduce the progress text to decoration.
+ *
+ * The agent may only **select and name** a candidate the engine already
+ * generated. Passing an id that is not a candidate of this session is rejected,
+ * which is the structural half of "the AI never computes numbers"
+ * (02 Ground Rules #1).
+ */
+export const nameBranch = spacetimedb.reducer(
+  { sessionId: t.u64(), position: t.i32(), pick: BranchPick, replaceExisting: t.bool() },
+  (ctx, { sessionId, position, pick, replaceExisting }) => {
     const agent = requireAgent(ctx);
     const sessionRow = ctx.db.session.id.find(sessionId);
     if (!sessionRow || sessionRow.householdId !== agent.householdId) {
       throw new SenderError('session not found');
     }
-    if (picks.length !== BRANCHES_SHOWN) {
-      throw new SenderError(`expected ${BRANCHES_SHOWN} picks, got ${picks.length}`);
+    if (position < 0 || position >= BRANCHES_SHOWN) {
+      throw new SenderError(`position must be 0..${BRANCHES_SHOWN - 1}`);
+    }
+    if (pick.name.length > 30) throw new SenderError('a branch name is at most 30 characters');
+    if (pick.summary.length > 200) throw new SenderError('a summary is at most 200 characters');
+
+    const candidate = ctx.db.branchCandidate.id.find(pick.candidateId);
+    if (!candidate || candidate.sessionId !== sessionId) {
+      throw new SenderError('that is not a candidate of this session');
     }
 
-    const candidates = new Map(
-      [...ctx.db.branchCandidate.sessionId.filter(sessionId)].map(c => [c.id, c])
-    );
-    const seen = new Set<string>();
-    for (const pick of picks) {
-      if (!candidates.has(pick.candidateId)) {
-        throw new SenderError('that is not a candidate of this session');
-      }
-      if (seen.has(String(pick.candidateId))) throw new SenderError('duplicate pick');
-      seen.add(String(pick.candidateId));
-      if (pick.name.length > 30) throw new SenderError('a branch name is at most 30 characters');
-      if (pick.summary.length > 200) throw new SenderError('a summary is at most 200 characters');
+    const existing = [...ctx.db.branch.sessionId.filter(sessionId)];
+    // The first of the three clears the previous batch, so a reroll does not
+    // briefly show a mix of old and new cards.
+    if (replaceExisting) {
+      for (const row of existing) ctx.db.branch.id.delete(row.id);
+    } else if (existing.some(row => row.candidateId === pick.candidateId)) {
+      throw new SenderError('that candidate is already on screen');
     }
 
     for (const row of [...ctx.db.branch.sessionId.filter(sessionId)]) {
-      ctx.db.branch.id.delete(row.id);
+      if (row.position === position) ctx.db.branch.id.delete(row.id);
     }
-    picks.forEach((pick, index) => {
-      const candidate = candidates.get(pick.candidateId)!;
-      ctx.db.branchCandidate.id.update({ ...candidate, shownAt: ctx.timestamp });
-      ctx.db.branch.insert({
-        id: 0n,
-        sessionId,
-        candidateId: pick.candidateId,
-        name: pick.name,
-        summary: pick.summary,
-        nameSource: 'agent',
-        position: index,
-      });
+
+    ctx.db.branchCandidate.id.update({ ...candidate, shownAt: ctx.timestamp });
+    ctx.db.branch.insert({
+      id: 0n,
+      sessionId,
+      candidateId: pick.candidateId,
+      name: pick.name,
+      summary: pick.summary,
+      nameSource: 'agent',
+      position,
+      tunedBy: undefined,
     });
+
+    // A new card means nobody has agreed to this set yet.
+    clearReady(ctx, sessionId);
   }
 );
 

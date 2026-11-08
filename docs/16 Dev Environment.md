@@ -143,6 +143,25 @@ native platforms are never touched.
    Confirm with: `env: load .env` in the startup log, or grep the bundle for
    `EXPO_PUBLIC_SPACETIME_HOST`.
 
+## Gotcha: a running agent joins the newest household
+The agent service serves the **newest** household it can see, so while it is
+running it registers into whichever household a verification script just
+created — and may post an agent message into it mid-test.
+
+That is correct behaviour, and the scripts tolerate it (`verify:flow` R4 and R9
+filter by role and message kind). But if a suite fails only inside
+`npm run verify` and passes on its own, a live agent is the first thing to
+suspect:
+
+```bash
+pkill -f "src/index.ts"
+```
+
+Mind the pattern: the service runs as `node ... src/index.ts` from inside
+`services/agent`, so matching `services/agent/src/index.ts` finds nothing — and
+**two** stray services will fight over the `agent` role, each deleting the
+other's member row.
+
 ## Gotcha: logging in after creating a local database
 `spacetime login` changes the CLI's **active identity**. A local database created
 *before* logging in is owned by the earlier server-local identity, and the newly

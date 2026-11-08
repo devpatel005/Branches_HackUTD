@@ -128,6 +128,7 @@ npm run verify:flow         # V4 Data flow — two clients through onboarding (n
 npm run verify:agent        # V5 Agent contract — validation gates, allowlist, fallbacks
 BRANCHES_AGENT_MODE=mock npm run verify:agent   # ...plus retry and failover over real HTTP
 npm run verify:agent:e2e    # the real service over the real bus (needs the mock + agent running)
+npm run verify:ready        # V7 ready check — two live clients (needs a module)
 npm run verify:selftest     # proves the harness reports failures (exits 1 by design)
 npm run typecheck           # engine + module + app
 ```

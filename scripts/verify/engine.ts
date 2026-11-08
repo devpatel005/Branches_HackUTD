@@ -29,7 +29,7 @@ import {
   type Constraint,
   type SimulationOutput,
 } from '@branches/engine';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const checks: Check[] = [];
 const goal = (out: SimulationOutput, id: string) => out.goals.find(g => g.id === id);
@@ -393,4 +393,4 @@ const ok = printTable('V2 Engine (E1-E10)', checks);
 // Keep the compact span helper referenced so the import surface stays honest.
 void span;
 
-process.exit(ok ? 0 : 1);
+finish(ok);

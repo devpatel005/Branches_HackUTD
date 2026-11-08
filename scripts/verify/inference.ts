@@ -24,7 +24,7 @@ import {
   TEST_HOUSEHOLD_A_LIQUID_SAVINGS,
   generateTestHouseholdA,
 } from '@branches/mock-data';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const checks: Check[] = [];
 
@@ -218,4 +218,4 @@ checks.push(
   check('V3', "member A's fun-money spend is within the allowance", privateTotalA <= TEST_HOUSEHOLD_A_FUN_MONEY, true)
 );
 
-process.exit(printTable('V3 Inference', checks) ? 0 : 1);
+finish(printTable('V3 Inference', checks));

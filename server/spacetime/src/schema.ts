@@ -337,6 +337,8 @@ export const branch = table(
     /** `agent` | `template`. Stage 5 only ever writes `template`. */
     nameSource: t.string(),
     position: t.i32(),
+    /** Who last tuned a slider on this branch, for "Tuned by Jordan". */
+    tunedBy: t.option(t.u64()),
   }
 );
 
@@ -355,6 +357,41 @@ export const constraint = table(
     /** The constraint shape, as JSON: goalOnTime / goalFullSize / etc. */
     target: t.string(),
     active: t.bool(),
+  }
+);
+
+/**
+ * One member's state inside a session — 05 Data Model#Live session.
+ *
+ * Presence, their pick, and their ready flag. This is the table the ready check
+ * reads: the commit rule is "every household member is present, every one is
+ * ready, and all of them are ready for the *same* branch".
+ */
+export const sessionMember = table(
+  { name: 'session_member', public: true },
+  {
+    memberId: t.u64().primaryKey(),
+    sessionId: t.u64().index('btree'),
+    /** True while this member has the session screen open and is connected. */
+    present: t.bool(),
+    selectedBranchId: t.option(t.u64()),
+    ready: t.bool(),
+    readyAt: t.option(t.timestamp()),
+  }
+);
+
+/**
+ * One reaction per member per branch; the latest wins
+ * (08 Live Session Spec#Reactions).
+ */
+export const reaction = table(
+  { name: 'reaction', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    sessionId: t.u64().index('btree'),
+    memberId: t.u64(),
+    branchId: t.u64(),
+    emoji: t.string(),
   }
 );
 
@@ -447,6 +484,8 @@ const spacetimedb = schema({
   branchCandidate,
   branch,
   constraint,
+  sessionMember,
+  reaction,
   planCommitment,
   agentJob,
   counter,

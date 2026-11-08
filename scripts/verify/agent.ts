@@ -43,7 +43,7 @@ import {
   generateCandidates,
 } from '@branches/engine';
 import { PRIVATE_MERCHANT_CANARIES, generateTestHouseholdA } from '@branches/mock-data';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const MODE = process.env.BRANCHES_AGENT_MODE === 'mock' ? 'mock' : 'recorded';
 /**
@@ -461,4 +461,4 @@ console.log('PENDING A8 — thinking off against the real endpoint. Needs a live
 console.log('  NVIDIA_API_KEY=... npm run -w @branches/agent smoke\n');
 
 for (const child of mocks) child.kill();
-process.exit(ok ? 0 : 1);
+finish(ok);

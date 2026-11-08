@@ -36,6 +36,13 @@ const DB = process.env.SPACETIME_DB_NAME ?? 'branches';
 const JOIN_CODE = process.env.AGENT_JOIN_CODE ?? '';
 const SECRET = process.env.AGENT_SECRET ?? 'branches-dev-agent-secret';
 const POLL_MS = Number(process.env.AGENT_POLL_MS ?? 400);
+/**
+ * Pause between branch cards so they are visibly sequential.
+ *
+ * Without it the three writes land within milliseconds and the effect is lost —
+ * the point is that the couple watches the options appear.
+ */
+const CARD_STAGGER_MS = Number(process.env.AGENT_CARD_STAGGER_MS ?? 450);
 
 const SUBSCRIPTIONS = [
   'SELECT * FROM household',
@@ -285,6 +292,9 @@ async function handleJob(conn: Conn, job: JobRow): Promise<void> {
     case 'affordability':
       await affordability(conn, job, input, progress);
       break;
+    case 'explain':
+      await explain(conn, job, input, progress);
+      break;
     default:
       await failWithFallback(conn, job, `unknown job kind: ${job.kind}`);
   }
@@ -424,20 +434,33 @@ async function selectBranches(
     return;
   }
 
-  await conn.reducers.nameBranches({
-    sessionId: job.sessionId,
-    picks: outcome.value.picks.map(pick => ({
-      candidateId: BigInt(pick.candidateId),
-      name: pick.name,
-      summary: pick.summary,
-    })),
-  });
+  // One card at a time, with progress between — 08 Live Session Spec wants
+  // cards to arrive one by one and "Building branch 2 of 3…" to mean something.
+  // Both partners watch the same rows land in the same order.
+  const total = outcome.value.picks.length;
+  for (const [index, pick] of outcome.value.picks.entries()) {
+    await progress(`Building branch ${index + 1} of ${total}…`);
+    await conn.reducers.nameBranch({
+      sessionId: job.sessionId,
+      position: index,
+      pick: {
+        candidateId: BigInt(pick.candidateId),
+        name: pick.name,
+        summary: pick.summary,
+      },
+      // The first write clears the previous batch, so a reroll never shows a
+      // mix of old and new cards.
+      replaceExisting: index === 0,
+    });
+    if (index < total - 1) await sleep(CARD_STAGGER_MS);
+  }
+
   await conn.reducers.completeJob({
     jobId: job.id,
     result: JSON.stringify(outcome.value),
     modelUsed: outcome.modelUsed,
   });
-  log(`job ${job.id} named 3 branches via ${outcome.modelUsed}`);
+  log(`job ${job.id} named ${total} branches via ${outcome.modelUsed}`);
 }
 
 async function translateFeedback(
@@ -548,6 +571,65 @@ async function affordability(
   await conn.reducers.completeJob({
     jobId: job.id,
     result: JSON.stringify(outcome.value),
+    modelUsed: outcome.modelUsed,
+  });
+}
+
+/**
+ * A sentence about an engine result — the post-commit summary
+ * (08 Live Session Spec#Agent as the third participant).
+ *
+ * Text, not a tool call, so it goes through the same gates as everything else:
+ * no number that is not in the data, no advice language. A rejection is
+ * invisible to the couple, because `applyBranch` already posted a plain system
+ * line when it committed.
+ */
+async function explain(
+  conn: Conn,
+  job: JobRow,
+  input: Record<string, unknown>,
+  progress: (text: string) => Promise<void>
+): Promise<void> {
+  await progress('Writing it up…');
+  const context = contextFor(conn, job.householdId, input);
+
+  const outcome = await runTask(
+    tiers,
+    {
+      kind: job.kind,
+      context,
+      instruction:
+        'The couple just chose this path together. Write one warm sentence describing what the projection now shows. Use only numbers from the data. Do not give advice.',
+      maxTokens: 300,
+      parse: (_args, text) => {
+        const trimmed = text.trim();
+        if (!trimmed) {
+          return { ok: false as const, failure: { gate: 'schema', detail: 'empty reply' } };
+        }
+        const failure = validateText(trimmed, context.engineData, {
+          maxLength: 240,
+          label: 'summary',
+        });
+        return failure ? { ok: false as const, failure } : { ok: true as const, value: trimmed };
+      },
+    },
+    text => void progress(text)
+  );
+
+  if (!outcome.ok) {
+    log(`job ${job.id} no summary: ${outcome.reason}`);
+    await conn.reducers.failJob({ jobId: job.id, reason: outcome.reason.slice(0, 2000) });
+    return;
+  }
+
+  await conn.reducers.postAgentMessage({
+    text: outcome.value,
+    chips: [],
+    refId: job.sessionId ?? undefined,
+  });
+  await conn.reducers.completeJob({
+    jobId: job.id,
+    result: JSON.stringify({ summary: outcome.value }),
     modelUsed: outcome.modelUsed,
   });
 }

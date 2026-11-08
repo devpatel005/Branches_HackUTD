@@ -18,4 +18,5 @@ export default __t.row({
   summary: __t.string(),
   nameSource: __t.string().name("name_source"),
   position: __t.i32(),
+  tunedBy: __t.option(__t.u64()).name("tuned_by"),
 });

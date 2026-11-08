@@ -13,7 +13,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative } from 'node:path';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const engineSrc = join(here, '..', '..', 'packages', 'engine', 'src');
@@ -93,4 +93,4 @@ checks.push(
   check('PU.imports', 'engine imports nothing outside itself', [...externalImports].sort(), [])
 );
 
-process.exit(printTable('Engine purity (Stage 1 Done-when)', checks) ? 0 : 1);
+finish(printTable('Engine purity (Stage 1 Done-when)', checks));

@@ -10,13 +10,6 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-import {
-  BranchPick,
-} from "./types.ts";
-
 export default {
   sessionId: __t.u64(),
-  get picks() {
-    return __t.array(BranchPick);
-  },
 };

@@ -19,7 +19,7 @@ import { DbConnection, tables, reducers } from '@branches/bindings';
 import type { Identity } from 'spacetimedb';
 import { FLEXIBLE_LABEL } from '@branches/engine';
 import { PRIVATE_MERCHANT_CANARIES, TEST_HOUSEHOLD_A_FUN_MONEY } from '@branches/mock-data';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const HOST = process.env.SPACETIME_HOST ?? 'ws://127.0.0.1:3000';
 const DB = process.env.SPACETIME_DB_NAME ?? 'branches';
@@ -954,9 +954,29 @@ const delayLevers = JSON.parse(
 ) as { delays: Record<string, number> };
 const houseBefore = mine.goals(a).find(g => g.id === houseGoal2.id)!;
 
-await a.conn.reducers.commitBranch({ branchId: delayBranch.id });
+// The commit now goes through the ready check (Stage 7): both partners join,
+// select the same branch, and report ready. The server commits inside the
+// second `setReady`, in one transaction.
+await a.conn.reducers.joinSession({ sessionId: sessionRow.id });
+await b.conn.reducers.joinSession({ sessionId: sessionRow.id });
+await a.conn.reducers.selectBranch({ sessionId: sessionRow.id, branchId: delayBranch.id });
+await b.conn.reducers.selectBranch({ sessionId: sessionRow.id, branchId: delayBranch.id });
+await a.conn.reducers.setReady({ sessionId: sessionRow.id, ready: true });
+await b.conn.reducers.setReady({ sessionId: sessionRow.id, ready: true });
+// Wait for **both** caches. The checks below read from A, so waiting only for
+// B asserts against a client that has not caught up yet — the same trap as
+// Stage 3's goal-edit checks, and it reads as a product failure rather than a
+// test one.
 await waitFor('committed on B', () =>
   mine.sessions(b).find(x => x.id === sessionRow.id)?.status === 'committed' ? true : undefined
+);
+await waitFor('committed on A', () =>
+  mine.sessions(a).find(x => x.id === sessionRow.id)?.status === 'committed' ? true : undefined
+);
+await waitFor('the goal move to reach A', () =>
+  (mine.goals(a).find(g => g.id === houseGoal2.id)?.targetMonth ?? 0) > houseBefore.targetMonth
+    ? true
+    : undefined
 );
 
 const houseAfter = mine.goals(a).find(g => g.id === houseGoal2.id)!;
@@ -968,7 +988,9 @@ checks.push(
   check('K3', 'the event is marked applied', mine.events(a).find(e => e.id === sessionEvent.id)?.status, 'applied'),
   check('K4', 'the session is committed and records the branch', [mine.sessions(a).find(x => x.id === sessionRow.id)?.status, mine.sessions(a).find(x => x.id === sessionRow.id)?.committedBranchId === delayBranch.id], ['committed', true]),
   check('K5', 'the plan is recomputed with nothing at risk', committedProjection.atRiskGoalIds, []),
-  check('K6', 'committing twice is refused', await rejects(() => a.conn.reducers.commitBranch({ branchId: delayBranch.id })), true),
+  // Idempotent: a second ready on a settled session does nothing rather than
+  // applying the branch twice (08 Live Session Spec#Edge cases).
+  check('K6', 'a second ready on a committed session does nothing', await secondReadyIsHarmless(a, sessionRow.id, houseGoal2.id), true),
   check('K7', 'the thread records the decision', mine.messages(a).some(m => m.text.startsWith('This is your plan now')), true)
 );
 
@@ -1045,9 +1067,39 @@ checks.push(
   check('R6', 'reseed keeps the transactions, so inference can re-run', rows.transactions(a).length > 0, true),
   check('R7', 'reseed returns the household to un-onboarded', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.onboarded, false),
   check('R8', 'reseed clears goals', mine.goals(a).length, 0),
-  check('R9', 'reseed clears events and the thread', [mine.events(a).length, mine.messages(a).length], [0, 0]),
+  // Agent-authored text is excluded on purpose. If an agent service is running
+  // it will have registered into this household and may post the post-commit
+  // summary moments after the reseed — correct behaviour, and not a reseed
+  // failure. The assertion is that reseed cleared what *was* there.
+  check(
+    'R9',
+    'reseed clears events and the thread',
+    [mine.events(a).length, mine.messages(a).filter(m => m.kind !== 'text').length],
+    [0, 0]
+  ),
   check('R10', 'reseed clears sessions', mine.sessions(a).length, 0)
 );
+
+/**
+ * A second `setReady` on a committed session must change nothing.
+ *
+ * Returns true when the goal's target month is identical afterwards — i.e. the
+ * branch was not applied a second time.
+ */
+async function secondReadyIsHarmless(
+  client: Client,
+  sessionId: bigint,
+  goalId: bigint
+): Promise<boolean> {
+  const before = mine.goals(client).find(g => g.id === goalId)?.targetMonth;
+  try {
+    await client.conn.reducers.setReady({ sessionId, ready: true });
+  } catch {
+    // A rejection is also acceptable: either way nothing was applied twice.
+  }
+  await new Promise(r => setTimeout(r, 200));
+  return mine.goals(client).find(g => g.id === goalId)?.targetMonth === before;
+}
 
 /** True when a reducer call is rejected, which is what we want to assert. */
 async function rejects(call: () => Promise<void>): Promise<boolean> {
@@ -1062,4 +1114,4 @@ async function rejects(call: () => Promise<void>): Promise<boolean> {
 const ok = printTable('V4 Data flow — Stage 2 (household, inference, onboarding)', checks);
 a.conn.disconnect();
 b.conn.disconnect();
-process.exit(ok ? 0 : 1);
+finish(ok);

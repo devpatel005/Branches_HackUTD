@@ -18,7 +18,7 @@
 import { DbConnection, tables, reducers } from '@branches/bindings';
 import { ENGINE_VERSION, f1SavingsNoInterest } from '@branches/engine';
 import type { Identity } from 'spacetimedb';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const HOST = process.env.SPACETIME_HOST ?? 'ws://127.0.0.1:3000';
 const DB = process.env.SPACETIME_DB_NAME ?? 'branches';
@@ -139,4 +139,4 @@ checks.push(
 );
 
 const ok = printTable('Stage 0 data path (V4 precursor)', checks);
-process.exit(ok ? 0 : 1);
+finish(ok);

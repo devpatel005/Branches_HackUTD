@@ -56,6 +56,7 @@ export const Branch = __t.object("Branch", {
   summary: __t.string(),
   nameSource: __t.string(),
   position: __t.i32(),
+  tunedBy: __t.option(__t.u64()),
 });
 export type Branch = __Infer<typeof Branch>;
 
@@ -250,6 +251,15 @@ export const PlanProjection = __t.object("PlanProjection", {
 });
 export type PlanProjection = __Infer<typeof PlanProjection>;
 
+export const Reaction = __t.object("Reaction", {
+  id: __t.u64(),
+  sessionId: __t.u64(),
+  memberId: __t.u64(),
+  branchId: __t.u64(),
+  emoji: __t.string(),
+});
+export type Reaction = __Infer<typeof Reaction>;
+
 export const Session = __t.object("Session", {
   id: __t.u64(),
   householdId: __t.u64(),
@@ -260,6 +270,16 @@ export const Session = __t.object("Session", {
   startedAt: __t.timestamp(),
 });
 export type Session = __Infer<typeof Session>;
+
+export const SessionMember = __t.object("SessionMember", {
+  memberId: __t.u64(),
+  sessionId: __t.u64(),
+  present: __t.bool(),
+  selectedBranchId: __t.option(__t.u64()),
+  ready: __t.bool(),
+  readyAt: __t.option(__t.timestamp()),
+});
+export type SessionMember = __Infer<typeof SessionMember>;
 
 export const Transaction = __t.object("Transaction", {
   id: __t.u64(),

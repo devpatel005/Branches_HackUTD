@@ -29,6 +29,7 @@ const SUITES: Suite[] = [
   { name: 'Stage 0 data path', script: 'stdb.ts', requiresServer: true, stage: 'Stage 0' },
   { name: 'V4 Data flow', script: 'flow.ts', requiresServer: true, stage: 'Stage 2-5' },
   { name: 'V5 Agent contract', script: 'agent.ts', stage: 'Stage 6' },
+  { name: 'V7 Ready check', script: 'ready.ts', requiresServer: true, stage: 'Stage 7' },
 ];
 
 const BOLD = '\x1b[1m';
@@ -94,4 +95,8 @@ console.log(
     ? `\n${GREEN}All ${results.length} suites behaved as expected.${RESET}\n`
     : `\n${RED}${failed} of ${results.length} suites did not behave as expected.${RESET}\n`
 );
-process.exit(failed === 0 ? 0 : 1);
+// Same flush hazard as the suites: the runner is routinely piped.
+process.exitCode = failed === 0 ? 0 : 1;
+process.stdout.write('', () => {
+  process.exit(failed === 0 ? 0 : 1);
+});

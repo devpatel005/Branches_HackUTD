@@ -19,7 +19,7 @@
  */
 import { DbConnection, reducers } from '@branches/bindings';
 import type { Identity } from 'spacetimedb';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const HOST = process.env.SPACETIME_HOST ?? 'ws://127.0.0.1:3000';
 const DB = process.env.SPACETIME_DB_NAME ?? 'branches';
@@ -176,7 +176,14 @@ checks.push(
   check(
     'R4',
     'a human cannot name branches directly',
-    await rejects(() => a.conn.reducers.nameBranches({ sessionId: 1n, picks: [] })),
+    await rejects(() =>
+      a.conn.reducers.nameBranch({
+        sessionId: 1n,
+        position: 0,
+        pick: { candidateId: 1n, name: 'x', summary: 'y' },
+        replaceExisting: true,
+      })
+    ),
     true
   )
 );
@@ -316,4 +323,4 @@ checks.push(
 const ok = printTable('V5 Agent, end to end (real service, mock model)', checks);
 a.conn.disconnect();
 b.conn.disconnect();
-process.exit(ok ? 0 : 1);
+finish(ok);

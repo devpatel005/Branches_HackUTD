@@ -17,7 +17,7 @@ import {
   toIntegerCents,
   fromIntegerCents,
 } from '@branches/engine';
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const checks: Check[] = [
   // ---- The five goldens ------------------------------------------------
@@ -53,4 +53,4 @@ const checks: Check[] = [
   check('M7', 'fromIntegerCents round-trips', fromIntegerCents(toIntegerCents(5273.65)), 5273.65),
 ];
 
-process.exit(printTable('V1 Math', checks) ? 0 : 1);
+finish(printTable('V1 Math', checks));

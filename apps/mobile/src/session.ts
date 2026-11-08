@@ -22,6 +22,7 @@ export type BranchView = {
   source: string;
   levers: Levers;
   stats: CandidateStats;
+  tunedBy: bigint | undefined;
 };
 
 export function useOpenSession() {
@@ -78,6 +79,7 @@ export function useBranches(sessionId: bigint | undefined) {
               source: candidate.source,
               levers: JSON.parse(candidate.levers) as Levers,
               stats: JSON.parse(candidate.stats) as CandidateStats,
+              tunedBy: b.tunedBy,
             },
           ];
         } catch {
@@ -163,4 +165,91 @@ export function branchStatLine(
   );
   parts.push(`${stats.goalsFunded}/${stats.goalsTotal} goals`);
   return parts;
+}
+
+// ---------------------------------------------------------------------------
+// Live session state (Stage 7)
+// ---------------------------------------------------------------------------
+
+export type SessionMemberView = {
+  memberId: bigint;
+  present: boolean;
+  selectedBranchId: bigint | undefined;
+  ready: boolean;
+};
+
+/**
+ * Who is in the session, what they picked, and whether they are ready.
+ *
+ * Only `role === 'member'` rows appear: the agent is a member of the household
+ * but has no hands to hold a button with, so including it would make the ready
+ * check impossible to satisfy.
+ */
+export function useSessionMembers(sessionId: bigint | undefined) {
+  const [rows] = useTable(tables.sessionMember);
+  const [memberRows] = useTable(tables.member);
+  const { me } = useMe();
+
+  return useMemo(() => {
+    if (sessionId === undefined || !me) return [];
+    const humans = memberRows
+      .filter(m => m.householdId === me.householdId && m.role === 'member')
+      .sort((a, b) => (a.id < b.id ? -1 : 1));
+
+    return humans.map(member => {
+      const state = rows.find(r => r.memberId === member.id && r.sessionId === sessionId);
+      return {
+        member,
+        state: {
+          memberId: member.id,
+          present: state?.present ?? false,
+          selectedBranchId: state?.selectedBranchId,
+          ready: state?.ready ?? false,
+        } satisfies SessionMemberView,
+      };
+    });
+  }, [rows, memberRows, sessionId, me?.householdId]);
+}
+
+/** Reactions for a session, keyed by branch id then member id. */
+export function useReactions(sessionId: bigint | undefined) {
+  const [rows] = useTable(tables.reaction);
+  return useMemo(() => {
+    const byBranch = new Map<string, { memberId: bigint; emoji: string }[]>();
+    if (sessionId === undefined) return byBranch;
+    for (const row of rows.filter(r => r.sessionId === sessionId)) {
+      const key = String(row.branchId);
+      byBranch.set(key, [...(byBranch.get(key) ?? []), { memberId: row.memberId, emoji: row.emoji }]);
+    }
+    return byBranch;
+  }, [rows, sessionId]);
+}
+
+export const REACTIONS = ['👍', '❤️', '😬'] as const;
+
+/**
+ * Whether the ready check should be on screen.
+ *
+ * Visible only when **every** household member is present and all of them have
+ * picked the same branch (08 Live Session Spec#Ready check) — a decision this
+ * size should not be reachable while a partner is away.
+ */
+export function readyCheckState(
+  members: readonly { state: SessionMemberView }[]
+): { visible: boolean; reason?: string; branchId?: bigint } {
+  if (members.length === 0) return { visible: false };
+
+  const absent = members.filter(m => !m.state.present);
+  if (absent.length > 0) {
+    return { visible: false, reason: 'waiting for your partner to open the session' };
+  }
+
+  const picks = members.map(m => m.state.selectedBranchId);
+  if (picks.some(pick => pick === undefined)) {
+    return { visible: false, reason: 'everyone needs to pick a path' };
+  }
+  if (new Set(picks.map(String)).size !== 1) {
+    return { visible: false, reason: "you've picked different paths" };
+  }
+  return { visible: true, branchId: picks[0] };
 }

@@ -6,7 +6,7 @@
  * expectation — if it ever exits 0, the harness has stopped detecting failures
  * and every other suite's PASS becomes meaningless.
  */
-import { check, printTable, type Check } from './table.ts';
+import { check, finish, printTable, type Check } from './table.ts';
 
 const checks: Check[] = [
   check('X1', 'a check that genuinely passes', 2 + 2, 4),
@@ -21,4 +21,4 @@ console.log(
     ? 'UNEXPECTED: the selftest passed. The harness is no longer catching failures.'
     : 'Expected: 2 failures reported above, exiting 1.'
 );
-process.exit(ok ? 0 : 1);
+finish(ok);

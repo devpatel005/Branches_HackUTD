@@ -10,6 +10,7 @@ import {
   Button,
   Caption,
   Chip,
+  Field,
   Loading,
   Notice,
   Row,
@@ -18,55 +19,86 @@ import {
   Title,
 } from '../src/components';
 import { Sheet } from '../src/sheets';
+import { ReadyRing, type RingMember } from '../src/ready-ring';
 import {
+  REACTIONS,
   branchStatLine,
   constraintLabel,
+  readyCheckState,
   useBranches,
   useConstraints,
   useOpenSession,
+  useReactions,
+  useSessionMembers,
   type BranchView,
 } from '../src/session';
-import { useActiveEvent, useImpact } from '../src/events';
+import { useActiveEvent, useAgentActivity, useImpact } from '../src/events';
 import { memberColor, useHouseholdMembers, useMe } from '../src/household';
 import { useGoals } from '../src/projection';
 import { dollars } from '../src/format';
 import { colors, space, tabularNums, type as typeScale } from '../src/theme';
 
 /**
- * The planning session — 10 Screens#Session.
+ * The live planning session — 10 Screens#Session, 08 Live Session Spec.
  *
- * Stage 5 drives it from one device: pick a path, lock an effect, reroll, pin a
- * non-negotiable, tune a slider, and commit with a temporary single-user
- * confirm. Stage 7 replaces that confirm with the simultaneous ready check and
- * adds presence, live selections and reactions to these same rows.
+ * Two people deciding together: presence, selections that appear on each
+ * other's screens, reactions, shared tuning marked "Tuned by …", locks and
+ * rerolls, pins and bridges, and a ready check that commits only while both are
+ * holding.
+ *
+ * Nothing here decides anything. Every state change goes through a reducer and
+ * comes back over the subscription, which is why both devices agree.
  */
 export default function SessionScreen() {
   const router = useRouter();
   const { me } = useMe();
-  const members = useHouseholdMembers();
+  const householdMembers = useHouseholdMembers();
   const { session, ready } = useOpenSession();
   const { event } = useActiveEvent();
   const { impact } = useImpact(event?.id);
   const { branches } = useBranches(session?.id);
   const constraints = useConstraints(session?.id);
+  const participants = useSessionMembers(session?.id);
+  const reactions = useReactions(session?.id);
   const { goals } = useGoals();
+  const agent = useAgentActivity();
 
   const generateCandidates = useReducer(reducers.generateCandidates);
   const reroll = useReducer(reducers.reroll);
   const addConstraint = useReducer(reducers.addConstraint);
   const removeConstraint = useReducer(reducers.removeConstraint);
   const requestBridge = useReducer(reducers.requestBridge);
-  const commitBranch = useReducer(reducers.commitBranch);
-  const closeSession = useReducer(reducers.closeSession);
+  const requestBranchNaming = useReducer(reducers.requestBranchNaming);
+  const joinSession = useReducer(reducers.joinSession);
+  const leaveSession = useReducer(reducers.leaveSession);
+  const selectBranch = useReducer(reducers.selectBranch);
+  const react = useReducer(reducers.react);
+  const setReady = useReducer(reducers.setReady);
+  const commitSolo = useReducer(reducers.commitBranchSolo);
+  const sendMessage = useReducer(reducers.sendMessage);
 
-  const [selected, setSelected] = useState<bigint | null>(null);
   const [openDetail, setOpenDetail] = useState<bigint | null>(null);
   const [pinSheetOpen, setPinSheetOpen] = useState(false);
+  const [feedback, setFeedback] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const titleOf = (goalId: string) =>
-    goals.find(g => String(g.id) === goalId)?.title ?? 'a goal';
+  const titleOf = (goalId: string) => goals.find(g => String(g.id) === goalId)?.title ?? 'a goal';
+  const nameOf = (memberId: bigint) =>
+    householdMembers.find(m => m.id === memberId)?.displayName ?? 'Partner';
+  const colourOf = (memberId: bigint) =>
+    memberColor(householdMembers.find(m => m.id === memberId)?.colorKey ?? 'a');
+
+  // Join on arrival, leave on departure. Presence is what gates the ready
+  // check, so it has to track the screen being open rather than the connection.
+  useEffect(() => {
+    if (!session) return;
+    const id = session.id;
+    joinSession({ sessionId: id }).catch(() => undefined);
+    return () => {
+      leaveSession({ sessionId: id }).catch(() => undefined);
+    };
+  }, [session?.id, joinSession, leaveSession]);
 
   // Generate the first batch once, when the session has none.
   const generated = useRef(new Set<string>());
@@ -75,8 +107,10 @@ export default function SessionScreen() {
     const key = String(session.id);
     if (generated.current.has(key)) return;
     generated.current.add(key);
-    generateCandidates({ sessionId: session.id }).catch(e => setError(messageOf(e)));
-  }, [session?.id, branches.length, generateCandidates]);
+    generateCandidates({ sessionId: session.id })
+      .then(() => requestBranchNaming({ sessionId: session.id }).catch(() => undefined))
+      .catch(e => setError(messageOf(e)));
+  }, [session?.id, branches.length, generateCandidates, requestBranchNaming]);
 
   if (!ready && !session) return <Loading label="Opening the session…" />;
   if (!session) {
@@ -89,10 +123,18 @@ export default function SessionScreen() {
     );
   }
 
+  const myState = participants.find(p => p.member.id === me?.id)?.state;
   const myPin = constraints.find(c => c.kind === 'pin' && c.memberId === me?.id);
   const locks = constraints.filter(c => c.kind === 'lock');
   const pins = constraints.filter(c => c.kind === 'pin');
-  const selectedBranch = branches.find(x => x.id === selected);
+  const committed = session.status !== 'open';
+  const check = readyCheckState(participants);
+  const selectedBranch = branches.find(b => b.id === check.branchId);
+  const disagreement =
+    participants.length > 1 &&
+    participants.every(p => p.state.present && p.state.selectedBranchId !== undefined) &&
+    new Set(participants.map(p => String(p.state.selectedBranchId))).size > 1;
+  const soloMode = participants.filter(p => p.state.present).length === 1;
 
   const run = async (fn: () => Promise<void>) => {
     setError(null);
@@ -106,21 +148,63 @@ export default function SessionScreen() {
     }
   };
 
+  const ringMembers: RingMember[] = participants.map(p => ({
+    memberId: String(p.member.id),
+    name: p.member.displayName,
+    colour: memberColor(p.member.colorKey),
+    ready: p.state.ready,
+    isMe: p.member.id === me?.id,
+  }));
+
+  // ---- post-commit ------------------------------------------------------
+  if (committed) {
+    const chosen = branches.find(b => b.id === session.committedBranchId);
+    return (
+      <Screen>
+        <Title>This is your plan now</Title>
+        {chosen ? (
+          <>
+            <Body>{chosen.name}</Body>
+            <Caption>{chosen.summary}</Caption>
+            <SectionHeader>What it does</SectionHeader>
+            {branchStatLine(chosen.stats, titleOf).map(part => (
+              <Row key={part} label={part} />
+            ))}
+          </>
+        ) : null}
+        {agent.progressText ? <Caption>{agent.progressText}</Caption> : null}
+        <Button label="View timeline" onPress={() => router.replace('/timeline')} />
+        <Button label="Back to Home" variant="secondary" onPress={() => router.replace('/')} />
+      </Screen>
+    );
+  }
+
   return (
     <Screen>
+      {/* Presence header: avatars in member colours, absent ones dimmed. */}
       <View style={styles.header}>
         <View style={styles.avatars}>
-          {members.map(m => (
-            <Avatar
-              key={String(m.id)}
-              name={m.displayName}
-              color={memberColor(m.colorKey)}
-              online={m.online}
-              size={28}
-            />
+          {participants.map(p => (
+            <View key={String(p.member.id)} style={styles.presenceItem}>
+              <Avatar
+                name={p.member.displayName}
+                color={memberColor(p.member.colorKey)}
+                online={p.state.present}
+                size={30}
+              />
+              {p.state.ready ? <Text style={styles.readyPip}>✓</Text> : null}
+            </View>
           ))}
+          {agent.running ? <Text style={styles.agentPip}>◇</Text> : null}
         </View>
-        <Pressable onPress={() => run(async () => { await closeSession({ sessionId: session.id }); router.replace('/chat'); })}>
+        <Pressable
+          onPress={() =>
+            run(async () => {
+              await leaveSession({ sessionId: session.id });
+              router.replace('/chat');
+            })
+          }
+        >
           <Caption>Close</Caption>
         </Pressable>
       </View>
@@ -134,6 +218,20 @@ export default function SessionScreen() {
         </Body>
       ) : null}
 
+      {agent.progressText ? (
+        <View style={styles.progressRow}>
+          <Text style={styles.agentPip}>◇</Text>
+          <Caption>{agent.progressText}</Caption>
+        </View>
+      ) : null}
+
+      {disagreement ? (
+        <Notice tone="warn">
+          You've picked different paths. Each of you can pin the one thing that matters most, and
+          the engine will look for a path that honours both.
+        </Notice>
+      ) : null}
+
       {locks.length > 0 ? (
         <>
           <SectionHeader>Keeping</SectionHeader>
@@ -143,7 +241,7 @@ export default function SessionScreen() {
                 key={String(lock.id)}
                 label={`🔒 ${constraintLabel(lock.target, titleOf)}`}
                 selected
-                tint={memberColor(members.find(m => m.id === lock.memberId)?.colorKey ?? 'a')}
+                tint={colourOf(lock.memberId)}
                 onPress={() => run(() => removeConstraint({ constraintId: lock.id }))}
               />
             ))}
@@ -158,20 +256,24 @@ export default function SessionScreen() {
             {pins.map(pin => (
               <Chip
                 key={String(pin.id)}
-                label={`📌 ${constraintLabel(pin.target, titleOf)} · ${
-                  members.find(m => m.id === pin.memberId)?.displayName ?? ''
-                }`}
+                label={`📌 ${constraintLabel(pin.target, titleOf)} · ${nameOf(pin.memberId)}`}
                 selected
-                tint={memberColor(members.find(m => m.id === pin.memberId)?.colorKey ?? 'a')}
-                onPress={() => run(() => removeConstraint({ constraintId: pin.id }))}
+                tint={colourOf(pin.memberId)}
+                onPress={
+                  pin.memberId === me?.id
+                    ? () => run(() => removeConstraint({ constraintId: pin.id }))
+                    : undefined
+                }
               />
             ))}
           </View>
-          <Button
-            label="Find a path that honours both"
-            variant="secondary"
-            onPress={() => run(() => requestBridge({ sessionId: session.id }))}
-          />
+          {pins.length >= participants.length ? (
+            <Button
+              label="Find a path that honours both"
+              variant="secondary"
+              onPress={() => run(() => requestBridge({ sessionId: session.id }))}
+            />
+          ) : null}
         </>
       ) : null}
 
@@ -183,9 +285,18 @@ export default function SessionScreen() {
           <BranchCard
             key={String(branch.id)}
             branch={branch}
-            selected={selected === branch.id}
+            selectedBy={participants.filter(p => p.state.selectedBranchId === branch.id)}
+            reactions={reactions.get(String(branch.id)) ?? []}
+            myReaction={
+              (reactions.get(String(branch.id)) ?? []).find(r => r.memberId === me?.id)?.emoji
+            }
             titleOf={titleOf}
-            onSelect={() => setSelected(branch.id)}
+            nameOf={nameOf}
+            colourOf={colourOf}
+            onSelect={() => run(() => selectBranch({ sessionId: session.id, branchId: branch.id }))}
+            onReact={emoji =>
+              run(() => react({ sessionId: session.id, branchId: branch.id, emoji }))
+            }
             onOpen={() => setOpenDetail(branch.id)}
             onLock={target =>
               run(() =>
@@ -206,7 +317,12 @@ export default function SessionScreen() {
         <Button
           label="Show me other paths"
           variant="secondary"
-          onPress={() => run(() => reroll({ sessionId: session.id }))}
+          onPress={() =>
+            run(async () => {
+              await reroll({ sessionId: session.id });
+              await requestBranchNaming({ sessionId: session.id }).catch(() => undefined);
+            })
+          }
           disabled={busy}
         />
         <Button
@@ -216,28 +332,74 @@ export default function SessionScreen() {
         />
       </View>
 
-      {selectedBranch ? (
+      <SectionHeader>None of these fit?</SectionHeader>
+      <Field
+        value={feedback}
+        onChangeText={setFeedback}
+        placeholder="Don't delay the house, we can cut eating out"
+      />
+      <Button
+        label="Tell us what you want"
+        variant="secondary"
+        onPress={() =>
+          run(async () => {
+            if (!feedback.trim()) return;
+            await sendMessage({ text: feedback });
+            setFeedback('');
+          })
+        }
+      />
+      <Caption>
+        {agent.running
+          ? 'Branches is reading that…'
+          : 'With no agent running, use the lock and pin chips on each card instead.'}
+      </Caption>
+
+      {/* The ready check. Visible only when everyone is here and agreed. */}
+      {check.visible && selectedBranch ? (
+        <>
+          <SectionHeader>Make it the plan</SectionHeader>
+          <ReadyRing
+            members={ringMembers}
+            branchName={selectedBranch.name}
+            committed={false}
+            onReady={isReady =>
+              setReady({ sessionId: session.id, ready: isReady }).catch(e =>
+                setError(messageOf(e))
+              )
+            }
+          />
+        </>
+      ) : (
         <>
           <SectionHeader>Make it the plan</SectionHeader>
           <Notice>
-            A single tap for now. From Stage 7 this becomes a press-and-hold that both of you do
-            at the same time.
+            {check.reason
+              ? `Not yet — ${check.reason}.`
+              : 'Pick a path to see the hold-to-confirm control.'}
           </Notice>
-          <Button
-            label={`Make "${selectedBranch.name}" our plan`}
-            onPress={() =>
-              run(async () => {
-                await commitBranch({ branchId: selectedBranch.id });
-                router.replace('/');
-              })
-            }
-            disabled={busy}
-          />
+          {soloMode && myState?.selectedBranchId !== undefined ? (
+            <>
+              <Button
+                label="Commit on my own (dev)"
+                variant="quiet"
+                onPress={() =>
+                  run(async () => {
+                    await commitSolo({ branchId: myState.selectedBranchId! });
+                  })
+                }
+              />
+              <Notice>
+                Dev only, and refused the moment your partner opens the session. The real path is
+                the press-and-hold you both do at once.
+              </Notice>
+            </>
+          ) : null}
         </>
-      ) : null}
+      )}
 
       <BranchDetailSheet
-        branch={branches.find(x => x.id === openDetail)}
+        branch={branches.find(b => b.id === openDetail)}
         onClose={() => setOpenDetail(null)}
         titleOf={titleOf}
       />
@@ -254,43 +416,61 @@ export default function SessionScreen() {
 /** A branch card — the thing you choose, so the one place cards are used. */
 function BranchCard({
   branch,
-  selected,
+  selectedBy,
+  reactions,
+  myReaction,
   titleOf,
+  nameOf,
+  colourOf,
   onSelect,
+  onReact,
   onOpen,
   onLock,
 }: {
   branch: BranchView;
-  selected: boolean;
+  selectedBy: { member: { id: bigint; displayName: string; colorKey: string }; state: { present: boolean } }[];
+  reactions: { memberId: bigint; emoji: string }[];
+  myReaction: string | undefined;
   titleOf: (goalId: string) => string;
+  nameOf: (memberId: bigint) => string;
+  colourOf: (memberId: bigint) => string;
   onSelect: () => void;
+  onReact: (emoji: string) => void;
   onOpen: () => void;
   onLock: (target: Constraint) => void;
 }) {
   const atRisk = branch.stats.atRiskGoalIds.length > 0;
-  const lockables: Constraint[] = Object.keys(branch.stats.goalDateChanges).length === 0
-    ? []
-    : Object.keys(branch.stats.goalDateChanges).map(goalId => ({ kind: 'goalOnTime', goalId }));
+  const lockables: Constraint[] = Object.keys(branch.stats.goalDateChanges).map(goalId => ({
+    kind: 'goalOnTime',
+    goalId,
+  }));
+
+  // Both partners on one card: split the border between their colours by
+  // showing the first and tinting the background (09 Design System).
+  const borderColour =
+    selectedBy.length === 0 ? 'transparent' : memberColor(selectedBy[0]!.member.colorKey);
 
   return (
     <Pressable
       onPress={onSelect}
       style={({ pressed }) => [
         styles.card,
-        selected && styles.cardSelected,
+        selectedBy.length > 0 && { backgroundColor: colors.surfaceRaised, borderColor: borderColour },
         pressed && { opacity: 0.8 },
       ]}
     >
       <View style={styles.cardHead}>
         <Text style={styles.cardName}>{branch.name}</Text>
-        {branch.source === 'custom' ? <Caption>tuned</Caption> : null}
         {branch.source === 'bridge' ? <Caption>bridge</Caption> : null}
+        {branch.tunedBy !== undefined ? (
+          <Caption color={colourOf(branch.tunedBy)}>Tuned by {nameOf(branch.tunedBy)}</Caption>
+        ) : null}
       </View>
       <Text style={styles.cardSummary}>{branch.summary}</Text>
 
       <View style={styles.statChips}>
         {branchStatLine(branch.stats, titleOf).map(part => (
-          <Text key={part} style={[styles.statChip, tabularNums, atRisk && styles.statChipAtRisk]}>
+          <Text key={part} style={[styles.statChip, tabularNums]}>
             {part}
           </Text>
         ))}
@@ -302,7 +482,35 @@ function BranchCard({
         </Caption>
       ) : null}
 
+      {/* Whoever picked this card, with their reaction beside them. */}
+      {selectedBy.length > 0 ? (
+        <View style={styles.pickedBy}>
+          {selectedBy.map(p => {
+            const emoji = reactions.find(r => r.memberId === p.member.id)?.emoji;
+            return (
+              <View key={String(p.member.id)} style={styles.pickedItem}>
+                <Avatar
+                  name={p.member.displayName}
+                  color={memberColor(p.member.colorKey)}
+                  online={p.state.present}
+                  size={22}
+                />
+                {emoji ? <Text style={styles.reaction}>{emoji}</Text> : null}
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
       <View style={styles.cardActions}>
+        {REACTIONS.map(emoji => (
+          <Chip
+            key={emoji}
+            label={emoji}
+            selected={myReaction === emoji}
+            onPress={() => onReact(emoji)}
+          />
+        ))}
         <Chip label="Adjust" onPress={onOpen} />
         {lockables.map(target => (
           <Chip
@@ -319,9 +527,10 @@ function BranchCard({
 /**
  * Sliders for a branch's levers — 08 Live Session Spec#Live tuning.
  *
- * Stepper buttons rather than a drag track: a slider needs a gesture library
- * for a good feel, and Stage 8 owns that. The reducer clamps every value to the
- * lever's domain, so neither this nor a real slider can send something invalid.
+ * Steppers rather than a drag track: a slider needs a gesture library for a
+ * decent feel, which is Stage 8's call. The reducer clamps every value to the
+ * lever's domain, so neither form can send something invalid — and any change
+ * clears both partners' ready flags.
  */
 function BranchDetailSheet({
   branch,
@@ -352,6 +561,9 @@ function BranchDetailSheet({
   return (
     <Sheet visible onClose={onClose} title={branch.name}>
       <Body dim>{branch.summary}</Body>
+      <Caption>
+        Both of you see this move, and any change clears the ready check.
+      </Caption>
 
       <SectionHeader>Save more each month</SectionHeader>
       <Stepper
@@ -501,7 +713,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: space.md,
   },
-  avatars: { flexDirection: 'row', gap: space.sm },
+  avatars: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  presenceItem: { flexDirection: 'row', alignItems: 'center' },
+  readyPip: { ...typeScale.caption, color: colors.accent, marginLeft: 2 },
+  agentPip: { ...typeScale.caption, color: colors.agent },
+  progressRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },
   actions: { marginTop: space.md },
 
@@ -515,13 +731,14 @@ const styles = StyleSheet.create({
     padding: space.md,
     marginBottom: space.sm,
   },
-  cardSelected: { backgroundColor: colors.surfaceRaised, borderColor: colors.accent },
-  cardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  cardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
   cardName: { ...typeScale.headline, color: colors.textPrimary, flex: 1 },
   cardSummary: { ...typeScale.body, color: colors.textSecondary, marginTop: space.xs, lineHeight: 21 },
   statChips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
   statChip: { ...typeScale.caption, color: colors.textSecondary },
-  statChipAtRisk: { color: colors.textSecondary },
+  pickedBy: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
+  pickedItem: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  reaction: { fontSize: 14 },
   cardActions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
 
   stepper: { marginTop: space.sm },

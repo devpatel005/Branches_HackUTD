@@ -96,3 +96,23 @@ export function printTable(title: string, checks: Check[]): boolean {
   console.log(`\n${summary}\n`);
   return failed === 0;
 }
+
+/**
+ * End a verification script without losing output.
+ *
+ * `process.exit()` discards **buffered** stdout writes when stdout is a pipe,
+ * which it is whenever the runner is piped into anything — `| tail`, a CI log
+ * collector, `run-all` itself. The symptom is brutal to diagnose: a table
+ * truncated mid-row, no error, and a garbled exit code, and only when piped.
+ *
+ * So set `exitCode` and let Node exit once the stream drains. The explicit exit
+ * in the callback covers scripts holding an open socket, which would otherwise
+ * keep the event loop alive forever.
+ */
+export function finish(ok: boolean): void {
+  const code = ok ? 0 : 1;
+  process.exitCode = code;
+  process.stdout.write('', () => {
+    process.exit(code);
+  });
+}

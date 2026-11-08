@@ -43,7 +43,7 @@ import ApplyEventInterpretationReducer from "./apply_event_interpretation_reduce
 import CheckAffordabilityReducer from "./check_affordability_reducer.ts";
 import ClaimJobReducer from "./claim_job_reducer.ts";
 import CloseSessionReducer from "./close_session_reducer.ts";
-import CommitBranchReducer from "./commit_branch_reducer.ts";
+import CommitBranchSoloReducer from "./commit_branch_solo_reducer.ts";
 import CompleteJobReducer from "./complete_job_reducer.ts";
 import ComputeImpactReducer from "./compute_impact_reducer.ts";
 import ConfirmAllMyItemsReducer from "./confirm_all_my_items_reducer.ts";
@@ -58,8 +58,11 @@ import FinishOnboardingReducer from "./finish_onboarding_reducer.ts";
 import GenerateCandidatesReducer from "./generate_candidates_reducer.ts";
 import IncrementReducer from "./increment_reducer.ts";
 import JoinHouseholdReducer from "./join_household_reducer.ts";
-import NameBranchesReducer from "./name_branches_reducer.ts";
+import JoinSessionReducer from "./join_session_reducer.ts";
+import LeaveSessionReducer from "./leave_session_reducer.ts";
+import NameBranchReducer from "./name_branch_reducer.ts";
 import PostAgentMessageReducer from "./post_agent_message_reducer.ts";
+import ReactReducer from "./react_reducer.ts";
 import RegisterAgentReducer from "./register_agent_reducer.ts";
 import RejectItemReducer from "./reject_item_reducer.ts";
 import RemoveConstraintReducer from "./remove_constraint_reducer.ts";
@@ -71,12 +74,14 @@ import ReseedHouseholdReducer from "./reseed_household_reducer.ts";
 import ResetReducer from "./reset_reducer.ts";
 import RunInferenceReducer from "./run_inference_reducer.ts";
 import SeedMockDataReducer from "./seed_mock_data_reducer.ts";
+import SelectBranchReducer from "./select_branch_reducer.ts";
 import SendMessageReducer from "./send_message_reducer.ts";
 import SetAssumptionsReducer from "./set_assumptions_reducer.ts";
 import SetDisplayNameReducer from "./set_display_name_reducer.ts";
 import SetFunMoneyReducer from "./set_fun_money_reducer.ts";
 import SetFunMoneyStatusReducer from "./set_fun_money_status_reducer.ts";
 import SetJobProgressReducer from "./set_job_progress_reducer.ts";
+import SetReadyReducer from "./set_ready_reducer.ts";
 import StartSessionReducer from "./start_session_reducer.ts";
 import TuneLeverReducer from "./tune_lever_reducer.ts";
 
@@ -102,7 +107,9 @@ import MemberRow from "./member_table.ts";
 import OnboardingProgressRow from "./onboarding_progress_table.ts";
 import PlanCommitmentRow from "./plan_commitment_table.ts";
 import PlanProjectionRow from "./plan_projection_table.ts";
+import ReactionRow from "./reaction_table.ts";
 import SessionRow from "./session_table.ts";
+import SessionMemberRow from "./session_member_table.ts";
 import TransactionRow from "./transaction_table.ts";
 
 /** Type-only namespace exports for generated type groups. */
@@ -360,6 +367,20 @@ const tablesSchema = __schema({
       { name: 'plan_projection_household_id_key', constraint: 'unique', columns: ['householdId'] },
     ],
   }, PlanProjectionRow),
+  reaction: __table({
+    name: 'reaction',
+    indexes: [
+      { accessor: 'id', name: 'reaction_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'sessionId', name: 'reaction_session_id_idx_btree', algorithm: 'btree', columns: [
+        'sessionId',
+      ] },
+    ],
+    constraints: [
+      { name: 'reaction_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ReactionRow),
   session: __table({
     name: 'session',
     indexes: [
@@ -377,6 +398,20 @@ const tablesSchema = __schema({
       { name: 'session_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, SessionRow),
+  sessionMember: __table({
+    name: 'session_member',
+    indexes: [
+      { accessor: 'memberId', name: 'session_member_member_id_idx_btree', algorithm: 'btree', columns: [
+        'memberId',
+      ] },
+      { accessor: 'sessionId', name: 'session_member_session_id_idx_btree', algorithm: 'btree', columns: [
+        'sessionId',
+      ] },
+    ],
+    constraints: [
+      { name: 'session_member_member_id_key', constraint: 'unique', columns: ['memberId'] },
+    ],
+  }, SessionMemberRow),
   transaction: __table({
     name: 'transaction',
     indexes: [
@@ -414,7 +449,7 @@ const reducersSchema = __reducers(
   __reducerSchema("check_affordability", CheckAffordabilityReducer),
   __reducerSchema("claim_job", ClaimJobReducer),
   __reducerSchema("close_session", CloseSessionReducer),
-  __reducerSchema("commit_branch", CommitBranchReducer),
+  __reducerSchema("commit_branch_solo", CommitBranchSoloReducer),
   __reducerSchema("complete_job", CompleteJobReducer),
   __reducerSchema("compute_impact", ComputeImpactReducer),
   __reducerSchema("confirm_all_my_items", ConfirmAllMyItemsReducer),
@@ -429,8 +464,11 @@ const reducersSchema = __reducers(
   __reducerSchema("generate_candidates", GenerateCandidatesReducer),
   __reducerSchema("increment", IncrementReducer),
   __reducerSchema("join_household", JoinHouseholdReducer),
-  __reducerSchema("name_branches", NameBranchesReducer),
+  __reducerSchema("join_session", JoinSessionReducer),
+  __reducerSchema("leave_session", LeaveSessionReducer),
+  __reducerSchema("name_branch", NameBranchReducer),
   __reducerSchema("post_agent_message", PostAgentMessageReducer),
+  __reducerSchema("react", ReactReducer),
   __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("reject_item", RejectItemReducer),
   __reducerSchema("remove_constraint", RemoveConstraintReducer),
@@ -442,12 +480,14 @@ const reducersSchema = __reducers(
   __reducerSchema("reset", ResetReducer),
   __reducerSchema("run_inference", RunInferenceReducer),
   __reducerSchema("seed_mock_data", SeedMockDataReducer),
+  __reducerSchema("select_branch", SelectBranchReducer),
   __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("set_assumptions", SetAssumptionsReducer),
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("set_fun_money", SetFunMoneyReducer),
   __reducerSchema("set_fun_money_status", SetFunMoneyStatusReducer),
   __reducerSchema("set_job_progress", SetJobProgressReducer),
+  __reducerSchema("set_ready", SetReadyReducer),
   __reducerSchema("start_session", StartSessionReducer),
   __reducerSchema("tune_lever", TuneLeverReducer),
 );
