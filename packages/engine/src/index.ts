@@ -53,6 +53,7 @@ export {
 
 export { simulate } from './simulate.ts';
 export { computeImpact, type ImpactOutput } from './impact.ts';
+export { describeEventEffects, type EffectLine } from './explain-events.ts';
 export { checkAffordability, type AffordabilityOutput } from './affordability.ts';
 
 export {
@@ -86,6 +87,7 @@ export {
   WINDOW_MONTHS,
   type Assumptions,
   type Baseline,
+  type EffectLedgerEntry,
   type EventEffects,
   type Goal,
   type GoalResult,

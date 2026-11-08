@@ -85,6 +85,31 @@ export type EventEffects = {
   incomeOverrideByMember: Record<MemberId, (number | null)[]>;
   /** memberId -> month -> amount added to income (a raise). */
   incomeDeltaByMember: Record<MemberId, number[]>;
+  /**
+   * An attributed record of every contribution, written by the same code that
+   * writes the arrays above.
+   *
+   * The arrays are what the simulation reads, and they are **sums** — a baby's
+   * $800/mo and $1,200/mo daycare land in the same slot and become $2,000. That
+   * is right for arithmetic and useless for explanation. The ledger keeps each
+   * contribution separate so "Show the Math" can say what a baby actually costs,
+   * without a second code path that could disagree with the first.
+   */
+  ledger: EffectLedgerEntry[];
+};
+
+export type EffectLedgerEntry = {
+  kind: 'one-time' | 'recurring' | 'income-zeroed' | 'income-raised';
+  /** Which template produced it. */
+  templateId: LifeEventTemplateId;
+  /** A stable slug for the contribution, e.g. `daycare`. */
+  cause: string;
+  /** Inclusive plan-month range. */
+  fromMonth: number;
+  toMonth: number;
+  /** Signed dollars, as written into the arrays. */
+  amount: number;
+  memberId?: MemberId;
 };
 
 /** One traceable number: what formula produced it, from what, under what assumptions. */

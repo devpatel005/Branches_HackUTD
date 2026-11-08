@@ -20,19 +20,29 @@ const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 
+/**
+ * `JSON.stringify` throws on a `bigint`, and SpacetimeDB row ids are `u64`.
+ * Every suite that compares an id would otherwise crash rather than fail, so
+ * both the formatter and the comparator handle it here, once.
+ */
+function bigintSafe(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? `${value}n` : value;
+}
+
 /** Stable, order-sensitive formatting so diffs are readable and deterministic. */
 export function fmt(value: unknown): string {
   if (value === null) return 'null';
   if (value === undefined) return '(none)';
+  if (typeof value === 'bigint') return String(value);
   if (typeof value === 'number') return Number.isInteger(value) ? String(value) : value.toFixed(2);
   if (Array.isArray(value)) return `[${value.map(fmt).join(', ')}]`;
-  if (typeof value === 'object') return JSON.stringify(value);
+  if (typeof value === 'object') return JSON.stringify(value, bigintSafe);
   return String(value);
 }
 
 /** Exact comparison, including array order. */
 export function eq(actual: unknown, expected: unknown): boolean {
-  return JSON.stringify(actual) === JSON.stringify(expected);
+  return JSON.stringify(actual, bigintSafe) === JSON.stringify(expected, bigintSafe);
 }
 
 /** Build a check by comparing exactly. */

@@ -206,6 +206,69 @@ export const planProjection = table(
 );
 
 /**
+ * A life event. **One is active at a time** per household: 08 Live Session says
+ * a session is about one event, so a new event supersedes any existing draft.
+ * Applied and dismissed events stay as history.
+ */
+export const lifeEvent = table(
+  { name: 'life_event', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    householdId: t.u64().index('btree'),
+    templateId: t.string(),
+    /** Template-specific parameters as JSON (05 Data Model). */
+    params: t.string(),
+    /** `draft` | `active` | `applied` | `dismissed`. */
+    status: t.string(),
+    createdBy: t.u64(),
+    createdAt: t.timestamp(),
+  }
+);
+
+/** The engine's impact output for one event (05 Data Model). */
+export const impact = table(
+  { name: 'impact', public: true },
+  {
+    eventId: t.u64().primaryKey(),
+    householdId: t.u64().index('btree'),
+    json: t.string(),
+    computedAt: t.timestamp(),
+  }
+);
+
+/**
+ * The shared chat thread.
+ *
+ * Pulled forward from Stage 6 deliberately: Stage 4 already needs somewhere for
+ * event entries, impact cards and affordability answers to live, and
+ * 10 Screens#Chat describes a thread. Building the thread now means Stage 6 adds
+ * the agent as another author rather than rebuilding the screen.
+ *
+ * `authorMemberId` is absent for engine-produced cards — they are results, not
+ * anybody's opinion. The agent will author its own messages as a member with
+ * role `agent`.
+ */
+export const chatMessage = table(
+  { name: 'chat_message', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    householdId: t.u64().index('btree'),
+    sessionId: t.option(t.u64()),
+    authorMemberId: t.option(t.u64()),
+    /** `text` | `event` | `impact` | `affordability` | `system`. */
+    kind: t.string(),
+    text: t.string(),
+    /** Tap-able follow-up answers (Stage 6). */
+    chips: t.array(t.string()),
+    /** The row this card refers to: an event id, mostly. */
+    refId: t.option(t.u64()),
+    /** Card data as JSON, for kinds that carry a result. */
+    payload: t.string(),
+    createdAt: t.timestamp(),
+  }
+);
+
+/**
  * Stage 0's sync canary, kept deliberately.
  *
  * `verify:stdb` uses it as a stale-publish detector: the reducer recomputes
@@ -234,6 +297,9 @@ const spacetimedb = schema({
   funMoney,
   goal,
   planProjection,
+  lifeEvent,
+  impact,
+  chatMessage,
   counter,
 });
 

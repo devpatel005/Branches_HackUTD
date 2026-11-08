@@ -3,6 +3,7 @@ import {
   WINDOW_MONTHS,
   type Assumptions,
   type Baseline,
+  type EffectLedgerEntry,
   type EventEffects,
   type LifeEvent,
   type LifeEventTemplateId,
@@ -117,6 +118,7 @@ export function emptyEffects(memberIds: readonly MemberId[]): EventEffects {
     recurringCosts: new Array<number>(WINDOW_MONTHS).fill(0),
     incomeOverrideByMember: overrides,
     incomeDeltaByMember: deltas,
+    ledger: [],
   };
 }
 
@@ -151,8 +153,12 @@ function member(
 ): MemberId {
   const raw = params[key];
   if (typeof raw !== 'string' || !memberIds.includes(raw)) {
+    // The type matters as much as the value here: a member id is a numeric
+    // string, so `35` and `"35"` look identical in an error message and only
+    // one of them is valid.
     throw new Error(
-      `event param "${key}" must be one of the household's members (${memberIds.join(', ')}), got ${String(raw)}`
+      `event param "${key}" must be one of the household's members (${memberIds.join(', ')}), ` +
+        `got ${typeof raw} ${JSON.stringify(raw)}`
     );
   }
   return raw;
@@ -183,6 +189,12 @@ export function compileEvents(
     if (!template) throw new Error(`unknown event template: ${event.templateId}`);
     const p = event.params;
 
+    /** Record a contribution alongside writing it, so the two cannot diverge. */
+    const note = (entry: Omit<EffectLedgerEntry, 'templateId'>) => {
+      if (entry.fromMonth > entry.toMonth) return;
+      fx.ledger.push({ templateId: event.templateId, ...entry });
+    };
+
     switch (event.templateId) {
       case 'baby': {
         const birth = num(p, 'monthsUntilBirth', template.params.monthsUntilBirth!);
@@ -190,10 +202,14 @@ export function compileEvents(
         const leaveMonths = num(p, 'leaveMonths', template.params.leaveMonths!);
         const care = choice(p, 'care', template.params.care!);
 
-        if (inWindow(birth)) fx.oneTimeCosts[birth]! += BABY_COSTS.oneTimeAtBirth;
+        if (inWindow(birth)) {
+          fx.oneTimeCosts[birth]! += BABY_COSTS.oneTimeAtBirth;
+          note({ kind: 'one-time', cause: 'birth', fromMonth: birth, toMonth: birth, amount: BABY_COSTS.oneTimeAtBirth });
+        }
         for (let m = birth; m < WINDOW_MONTHS; m++) {
           if (inWindow(m)) fx.recurringCosts[m]! += BABY_COSTS.monthlyFromBirth;
         }
+        note({ kind: 'recurring', cause: 'raising-a-child', fromMonth: birth, toMonth: WINDOW_MONTHS - 1, amount: BABY_COSTS.monthlyFromBirth });
 
         if (care === 'home') {
           // One partner stays home: their income stops at birth and does not
@@ -201,14 +217,18 @@ export function compileEvents(
           for (let m = birth; m < WINDOW_MONTHS; m++) {
             if (inWindow(m)) fx.incomeOverrideByMember[leaveMember]![m] = 0;
           }
+          note({ kind: 'income-zeroed', cause: 'staying-home', fromMonth: birth, toMonth: WINDOW_MONTHS - 1, amount: 0, memberId: leaveMember });
         } else {
           // Unpaid leave, then daycare once leave ends.
           for (let m = birth; m < birth + leaveMonths; m++) {
             if (inWindow(m)) fx.incomeOverrideByMember[leaveMember]![m] = 0;
           }
+          note({ kind: 'income-zeroed', cause: 'unpaid-leave', fromMonth: birth, toMonth: Math.min(birth + leaveMonths - 1, WINDOW_MONTHS - 1), amount: 0, memberId: leaveMember });
+
           for (let m = birth + leaveMonths; m < WINDOW_MONTHS; m++) {
             if (inWindow(m)) fx.recurringCosts[m]! += BABY_COSTS.monthlyDaycare;
           }
+          note({ kind: 'recurring', cause: 'daycare', fromMonth: birth + leaveMonths, toMonth: WINDOW_MONTHS - 1, amount: BABY_COSTS.monthlyDaycare });
         }
         break;
       }
@@ -220,13 +240,17 @@ export function compileEvents(
         for (let m = start; m < start + months; m++) {
           if (inWindow(m)) fx.incomeOverrideByMember[who]![m] = 0;
         }
+        note({ kind: 'income-zeroed', cause: 'out-of-work', fromMonth: start, toMonth: Math.min(start + months - 1, WINDOW_MONTHS - 1), amount: 0, memberId: who });
         break;
       }
 
       case 'medical_bill': {
         const amount = num(p, 'amount', template.params.amount!);
         const month = num(p, 'month', template.params.month!);
-        if (inWindow(month)) fx.oneTimeCosts[month]! += amount;
+        if (inWindow(month)) {
+          fx.oneTimeCosts[month]! += amount;
+          note({ kind: 'one-time', cause: 'medical-bill', fromMonth: month, toMonth: month, amount });
+        }
         break;
       }
 
@@ -237,12 +261,16 @@ export function compileEvents(
         const down = price * (downPct / 100);
         const financed = price - down;
 
-        if (inWindow(month)) fx.oneTimeCosts[month]! += down;
+        if (inWindow(month)) {
+          fx.oneTimeCosts[month]! += down;
+          note({ kind: 'one-time', cause: 'down-payment', fromMonth: month, toMonth: month, amount: down });
+        }
         if (financed > 0) {
           const payment = f4LoanPayment(financed, CAR_LOAN_MONTHS, assumptions.carRateAnnual);
           for (let m = month; m < month + CAR_LOAN_MONTHS; m++) {
             if (inWindow(m)) fx.recurringCosts[m]! += payment;
           }
+          note({ kind: 'recurring', cause: 'car-loan', fromMonth: month, toMonth: Math.min(month + CAR_LOAN_MONTHS - 1, WINDOW_MONTHS - 1), amount: payment });
         }
         break;
       }
@@ -255,6 +283,7 @@ export function compileEvents(
         for (let m = start; m < WINDOW_MONTHS; m++) {
           if (inWindow(m)) deltas[m] = (deltas[m] ?? 0) + increase;
         }
+        note({ kind: 'income-raised', cause: 'raise', fromMonth: start, toMonth: WINDOW_MONTHS - 1, amount: increase, memberId: who });
         break;
       }
 
@@ -263,7 +292,10 @@ export function compileEvents(
         const month = num(p, 'month', template.params.month!);
         // A negative "cost": the emergency-fund step subtracts one-time costs,
         // so a negative one adds to the fund (06 Engine Spec).
-        if (inWindow(month)) fx.oneTimeCosts[month]! -= amount;
+        if (inWindow(month)) {
+          fx.oneTimeCosts[month]! -= amount;
+          note({ kind: 'one-time', cause: 'money-in', fromMonth: month, toMonth: month, amount: -amount });
+        }
         break;
       }
     }

@@ -5,6 +5,9 @@ import {
   baselineFromItems,
   f1SavingsNoInterest,
   followUpForGapAnswer,
+  computeImpact as computeImpactWithEngine,
+  checkAffordability as checkAffordabilityWithEngine,
+  EVENT_TEMPLATES,
   inferBaseline,
   isLiquidSavingsQuestion,
   liquidSavingsFromRange,
@@ -17,6 +20,9 @@ import {
   type GapQuestion,
   type Goal,
   type InferredItem,
+  type LifeEvent,
+  type LifeEventTemplateId,
+  type SimulationInput,
   type Transaction,
 } from '@branches/engine';
 import {
@@ -760,6 +766,15 @@ export const reseedHousehold = spacetimedb.reducer(ctx => {
   for (const row of [...ctx.db.goal.householdId.filter(householdId)]) {
     ctx.db.goal.id.delete(row.id);
   }
+  for (const row of [...ctx.db.lifeEvent.householdId.filter(householdId)]) {
+    ctx.db.lifeEvent.id.delete(row.id);
+  }
+  for (const row of [...ctx.db.impact.householdId.filter(householdId)]) {
+    ctx.db.impact.eventId.delete(row.eventId);
+  }
+  for (const row of [...ctx.db.chatMessage.householdId.filter(householdId)]) {
+    ctx.db.chatMessage.id.delete(row.id);
+  }
   const projection = ctx.db.planProjection.householdId.find(householdId);
   if (projection) ctx.db.planProjection.householdId.delete(householdId);
 
@@ -767,6 +782,371 @@ export const reseedHousehold = spacetimedb.reducer(ctx => {
   if (h) ctx.db.household.id.update({ ...h, onboarded: false });
 
   recomputeBaseline(ctx, householdId, caller.id);
+});
+
+// ---------------------------------------------------------------------------
+// Life events, impact and chat (Stage 4)
+// ---------------------------------------------------------------------------
+
+/** One key/value pair of an event parameter, as sent from a form or a chip. */
+const ParamEntry = t.object('ParamEntry', { key: t.string(), value: t.string() });
+
+/**
+ * Rebuild the engine's input for a household, so events and affordability go
+ * through exactly the same simulation the committed plan does.
+ */
+function simulationInputFor(ctx: Ctx, householdId: bigint): SimulationInput | null {
+  const baselineRow = ctx.db.baseline.householdId.find(householdId);
+  if (!baselineRow) return null;
+
+  const members = [...ctx.db.member.householdId.filter(householdId)].filter(
+    m => m.role === 'member'
+  );
+
+  const incomeByMember: Record<string, number> = {};
+  for (const entry of baselineRow.incomeByMember) {
+    incomeByMember[String(entry.memberId)] = entry.cents / 100;
+  }
+  const funMoneyByMember: Record<string, number> = {};
+  for (const m of members) {
+    if (incomeByMember[String(m.id)] === undefined) incomeByMember[String(m.id)] = 0;
+    const fun = ctx.db.funMoney.memberId.find(m.id);
+    funMoneyByMember[String(m.id)] = fun ? fun.monthlyCents / 100 : 0;
+  }
+
+  const goals: Goal[] = [...ctx.db.goal.householdId.filter(householdId)]
+    .filter(g => g.status === 'active')
+    .sort((a, b) => (a.id < b.id ? -1 : 1))
+    .map(g => ({
+      id: String(g.id),
+      costToday: g.costTodayCents / 100,
+      targetMonth: g.targetMonth,
+      priority: g.priority === 'must' ? 'must' : 'flex',
+    }));
+
+  return {
+    baseline: {
+      incomeByMember,
+      fixed: baselineRow.fixedCents / 100,
+      debt: baselineRow.debtCents / 100,
+      flexible: baselineRow.flexibleCents / 100,
+      funMoneyByMember,
+      retirement: baselineRow.retirementCents / 100,
+      liquidSavings: baselineRow.liquidSavingsCents / 100,
+    },
+    goals,
+    assumptions: assumptionsFor(ctx, householdId),
+  };
+}
+
+/** Member display names, so the engine's effect lines read naturally. */
+function memberNamesFor(ctx: Ctx, householdId: bigint): Record<string, string> {
+  const names: Record<string, string> = {};
+  for (const m of [...ctx.db.member.householdId.filter(householdId)]) {
+    names[String(m.id)] = m.displayName;
+  }
+  return names;
+}
+
+function postMessage(
+  ctx: Ctx,
+  householdId: bigint,
+  message: {
+    kind: string;
+    text: string;
+    authorMemberId?: bigint;
+    refId?: bigint;
+    payload?: unknown;
+    chips?: string[];
+  }
+): void {
+  ctx.db.chatMessage.insert({
+    id: 0n,
+    householdId,
+    sessionId: undefined,
+    authorMemberId: message.authorMemberId,
+    kind: message.kind,
+    text: message.text,
+    chips: message.chips ?? [],
+    refId: message.refId,
+    payload: message.payload === undefined ? '' : JSON.stringify(message.payload),
+    createdAt: ctx.timestamp,
+  });
+}
+
+/**
+ * Coerce form values using the **template's** parameter spec.
+ *
+ * Guessing from the string shape does not work: a member id is a numeric
+ * string, so `"35"` would become the number `35` and fail the engine's member
+ * check — with an error reading `got 35` against a list containing 35, which
+ * hides that the problem was the type. The template already knows which
+ * parameters are members, which are choices and which are numbers.
+ */
+function parseParams(
+  templateId: LifeEventTemplateId,
+  entries: readonly { key: string; value: string }[]
+): Record<string, unknown> {
+  const spec = EVENT_TEMPLATES[templateId]?.params ?? {};
+  const params: Record<string, unknown> = {};
+
+  for (const { key, value } of entries) {
+    const paramSpec = spec[key];
+    if (!paramSpec) throw new SenderError(`"${key}" is not a parameter of this event`);
+
+    if (paramSpec.isMember || paramSpec.choices) {
+      params[key] = value;
+      continue;
+    }
+    const asNumber = Number(value);
+    if (value.trim() === '' || !Number.isFinite(asNumber)) {
+      throw new SenderError(`"${key}" needs a number, got "${value}"`);
+    }
+    params[key] = asNumber;
+  }
+  return params;
+}
+
+/**
+ * Run an engine call, turning a thrown validation error into a rejection.
+ *
+ * The engine throws plain `Error`s — it cannot import `SenderError` without
+ * taking a dependency, which `verify:purity` forbids. Unwrapped, those throws
+ * **panic the WASM instance** and every connected client sees a fatal error
+ * rather than a message. A user typing a bad value must never be able to take
+ * the database down.
+ */
+function viaEngine<T>(run: () => T): T {
+  try {
+    return run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new SenderError(message);
+  }
+}
+
+function activeEventFor(ctx: Ctx, householdId: bigint) {
+  return [...ctx.db.lifeEvent.householdId.filter(householdId)]
+    .filter(e => e.status === 'draft' || e.status === 'active')
+    .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
+}
+
+/**
+ * Record something that happened and work out what it does to the plan.
+ *
+ * In Stage 4 the parameters come from a form; from Stage 6 the agent fills what
+ * it can and asks for the rest. The form stays as the permanent fallback for
+ * when the agent is unavailable (07 Agent Spec#Deterministic fallbacks).
+ */
+export const createEvent = spacetimedb.reducer(
+  { templateId: t.string(), params: t.array(ParamEntry) },
+  (ctx, { templateId, params }) => {
+    const caller = requireHuman(ctx);
+    const template = EVENT_TEMPLATES[templateId as LifeEventTemplateId];
+    if (!template) throw new SenderError(`unknown event: ${templateId}`);
+
+    // One active event at a time: a new one supersedes the old draft.
+    const existing = activeEventFor(ctx, caller.householdId);
+    if (existing) {
+      ctx.db.lifeEvent.id.update({ ...existing, status: 'dismissed' });
+      const staleImpact = ctx.db.impact.eventId.find(existing.id);
+      if (staleImpact) ctx.db.impact.eventId.delete(existing.id);
+    }
+
+    const event = ctx.db.lifeEvent.insert({
+      id: 0n,
+      householdId: caller.householdId,
+      templateId,
+      params: JSON.stringify(viaEngine(() => parseParams(templateId as LifeEventTemplateId, params))),
+      status: 'active',
+      createdBy: caller.id,
+      createdAt: ctx.timestamp,
+    });
+
+    postMessage(ctx, caller.householdId, {
+      kind: 'event',
+      text: template.label,
+      authorMemberId: caller.id,
+      refId: event.id,
+    });
+  }
+);
+
+/** Fill in one parameter — a form field, or a tap-able chip from Stage 6. */
+export const answerEventParam = spacetimedb.reducer(
+  { eventId: t.u64(), key: t.string(), value: t.string() },
+  (ctx, { eventId, key, value }) => {
+    const caller = requireHuman(ctx);
+    const event = ctx.db.lifeEvent.id.find(eventId);
+    if (!event) throw new SenderError('event not found');
+    if (event.householdId !== caller.householdId) {
+      throw new SenderError('that event is not in your household');
+    }
+    const template = EVENT_TEMPLATES[event.templateId as LifeEventTemplateId];
+    if (!template || !(key in template.params)) {
+      throw new SenderError(`"${key}" is not a parameter of this event`);
+    }
+
+    const current = JSON.parse(event.params) as Record<string, unknown>;
+    const merged = {
+      ...current,
+      ...viaEngine(() => parseParams(event.templateId as LifeEventTemplateId, [{ key, value }])),
+    };
+    ctx.db.lifeEvent.id.update({ ...event, params: JSON.stringify(merged) });
+  }
+);
+
+/**
+ * Run the engine's impact for an event and store it.
+ *
+ * The engine runs here, in the reducer, like every other number
+ * (02 Ground Rules #1 and #7). A template whose parameters are still incomplete
+ * throws from the engine's own validation, which is the right place for it.
+ */
+export const computeImpact = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
+  const caller = requireHuman(ctx);
+  const event = ctx.db.lifeEvent.id.find(eventId);
+  if (!event) throw new SenderError('event not found');
+  if (event.householdId !== caller.householdId) {
+    throw new SenderError('that event is not in your household');
+  }
+
+  const input = simulationInputFor(ctx, caller.householdId);
+  if (!input) throw new SenderError('finish onboarding before adding an event');
+  if (input.goals.length === 0) throw new SenderError('add a goal before adding an event');
+
+  const lifeEventInput: LifeEvent = {
+    templateId: event.templateId as LifeEventTemplateId,
+    params: JSON.parse(event.params) as Record<string, unknown>,
+  };
+
+  const output = viaEngine(() =>
+    computeImpactWithEngine(input, lifeEventInput, memberNamesFor(ctx, caller.householdId))
+  );
+
+  // The before/after projections are each ~13 KB and the card needs neither in
+  // full; the deltas, effects and provenance are what the UI renders. Dropping
+  // them keeps the row small enough to broadcast on every recompute.
+  const stored = {
+    newlyAtRiskGoalIds: output.newlyAtRiskGoalIds,
+    shortfallsByGoalId: output.shortfallsByGoalId,
+    alreadyAtRiskGoalIds: output.alreadyAtRiskGoalIds,
+    tightYearsBefore: output.tightYearsBefore,
+    tightYearsAfter: output.tightYearsAfter,
+    tightMonthsAfter: output.tightMonthsAfter,
+    emergencyMonthsMinBefore: output.emergencyMonthsMinBefore,
+    emergencyMonthsMinAfter: output.emergencyMonthsMinAfter,
+    freeToPlanBefore: output.freeToPlanBefore,
+    freeToPlanAfter: output.freeToPlanAfter,
+    noImpact: output.noImpact,
+    effects: output.effects,
+    provenance: output.provenance,
+    goalsAfter: output.after.goals,
+    seriesAfter: output.after.series.monthly,
+  };
+
+  const existing = ctx.db.impact.eventId.find(eventId);
+  const row = {
+    eventId,
+    householdId: caller.householdId,
+    json: JSON.stringify(stored),
+    computedAt: ctx.timestamp,
+  };
+  if (existing) ctx.db.impact.eventId.update(row);
+  else ctx.db.impact.insert(row);
+
+  postMessage(ctx, caller.householdId, {
+    kind: 'impact',
+    text: output.noImpact
+      ? "This doesn't change your goals."
+      : `${output.newlyAtRiskGoalIds.length} goal${output.newlyAtRiskGoalIds.length === 1 ? '' : 's'} no longer fit.`,
+    refId: eventId,
+  });
+});
+
+export const dismissEvent = spacetimedb.reducer({ eventId: t.u64() }, (ctx, { eventId }) => {
+  const caller = requireHuman(ctx);
+  const event = ctx.db.lifeEvent.id.find(eventId);
+  if (!event) throw new SenderError('event not found');
+  if (event.householdId !== caller.householdId) {
+    throw new SenderError('that event is not in your household');
+  }
+  ctx.db.lifeEvent.id.update({ ...event, status: 'dismissed' });
+  const existing = ctx.db.impact.eventId.find(eventId);
+  if (existing) ctx.db.impact.eventId.delete(eventId);
+
+  postMessage(ctx, caller.householdId, {
+    kind: 'system',
+    text: 'Keeping the plan as it is.',
+    authorMemberId: caller.id,
+    refId: eventId,
+  });
+});
+
+/**
+ * "Can we afford a $1,200 couch?" — 06 Engine Spec#Affordability check.
+ *
+ * Answered in **time** as well as dollars: which goals move and by how much, or
+ * "no goal changes; emergency fund goes from 4.2 to 3.9 months". The result is
+ * posted as a card in the thread rather than stored in its own table, since it
+ * is a question that was asked once, not a part of the plan.
+ */
+export const checkAffordability = spacetimedb.reducer(
+  { amountCents: t.i32(), label: t.string() },
+  (ctx, { amountCents, label }) => {
+    const caller = requireHuman(ctx);
+    if (amountCents <= 0) throw new SenderError('enter an amount above zero');
+
+    const input = simulationInputFor(ctx, caller.householdId);
+    if (!input) throw new SenderError('finish onboarding first');
+
+    const result = viaEngine(() =>
+      checkAffordabilityWithEngine(input, amountCents / 100, label.trim() || 'it')
+    );
+
+    postMessage(ctx, caller.householdId, {
+      kind: 'affordability',
+      text: result.affordableWithoutChanges
+        ? `No goal changes for ${label.trim() || 'that'}.`
+        : `${result.newlyAtRiskGoalIds.length} goal${result.newlyAtRiskGoalIds.length === 1 ? '' : 's'} would stop fitting.`,
+      authorMemberId: caller.id,
+      payload: {
+        amount: result.amount,
+        label: result.label,
+        affordableWithoutChanges: result.affordableWithoutChanges,
+        newlyAtRiskGoalIds: result.newlyAtRiskGoalIds,
+        emergencyMonthsNowBefore: result.emergencyMonthsNowBefore,
+        emergencyMonthsNowAfter: result.emergencyMonthsNowAfter,
+        emergencyMonthsMinBefore: result.emergencyMonthsMinBefore,
+        emergencyMonthsMinAfter: result.emergencyMonthsMinAfter,
+        minimalDelayByGoalId: result.minimalDelayByGoalId,
+        minimalSaveMore: result.minimalSaveMore,
+        // A one-time purchase is absorbed by the emergency fund, not taken out
+        // of goal contributions, so the honest headline for a big spend is how
+        // many months turn tight rather than which goals break.
+        tightMonthsAfter: result.after.tightMonths.length,
+        tightMonthsBefore: result.before.tightMonths.length,
+      },
+    });
+  }
+);
+
+/**
+ * A plain message in the thread.
+ *
+ * Stage 6 extends this to queue an `agent_job`; for now it only records what was
+ * said, so the thread reads as a conversation even with no agent running.
+ */
+export const sendMessage = spacetimedb.reducer({ text: t.string() }, (ctx, { text }) => {
+  const caller = requireHuman(ctx);
+  const trimmed = text.trim();
+  if (!trimmed) throw new SenderError('a message cannot be empty');
+  if (trimmed.length > 1000) throw new SenderError('that message is too long');
+  postMessage(ctx, caller.householdId, {
+    kind: 'text',
+    text: trimmed,
+    authorMemberId: caller.id,
+  });
 });
 
 // ---------------------------------------------------------------------------

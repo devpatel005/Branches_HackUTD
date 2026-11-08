@@ -36,6 +36,9 @@ const SUBSCRIPTIONS = [
   'SELECT * FROM onboarding_progress',
   'SELECT * FROM goal',
   'SELECT * FROM plan_projection',
+  'SELECT * FROM life_event',
+  'SELECT * FROM impact',
+  'SELECT * FROM chat_message',
 ];
 
 type Client = { label: string; conn: DbConnection; identity: Identity };
@@ -113,6 +116,14 @@ const mine = {
   goals: (c: Client) => [...c.conn.db.goal.iter()].filter(g => g.householdId === scopedHouseholdId),
   projection: (c: Client) =>
     [...c.conn.db.planProjection.iter()].find(r => r.householdId === scopedHouseholdId),
+  events: (c: Client) =>
+    [...c.conn.db.lifeEvent.iter()].filter(e => e.householdId === scopedHouseholdId),
+  impacts: (c: Client) =>
+    [...c.conn.db.impact.iter()].filter(i => i.householdId === scopedHouseholdId),
+  messages: (c: Client) =>
+    [...c.conn.db.chatMessage.iter()]
+      .filter(m => m.householdId === scopedHouseholdId)
+      .sort((x, y) => (x.id < y.id ? -1 : 1)),
 };
 
 const checks: Check[] = [];
@@ -459,7 +470,192 @@ checks.push(
 );
 
 // ======================================================================
-// 9. Reseed keeps the pairing
+// 9. Life events and impact — Stage 4's Done-when
+// ======================================================================
+// Put Japan back, so the household is the one the goldens describe.
+await a.conn.reducers.addGoal({
+  title: 'Japan',
+  icon: 'plane',
+  costTodayCents: 500000,
+  targetMonth: 24,
+  priority: 'flex',
+});
+await waitFor('both goals restored', () => (mine.goals(a).length === 2 ? true : undefined));
+
+const memberBId = memberB.id;
+
+// --- E4: a $6,000 medical bill in month 3 changes nothing ---------------
+await a.conn.reducers.createEvent({
+  templateId: 'medical_bill',
+  params: [
+    { key: 'amount', value: '6000' },
+    { key: 'month', value: '3' },
+  ],
+});
+const medicalEvent = await waitFor('medical event', () =>
+  mine.events(a).find(e => e.templateId === 'medical_bill' && e.status === 'active')
+);
+await a.conn.reducers.computeImpact({ eventId: medicalEvent.id });
+const medicalImpact = await waitFor('medical impact', () =>
+  mine.impacts(a).find(i => i.eventId === medicalEvent.id)
+);
+const e4 = JSON.parse(medicalImpact.json) as {
+  noImpact: boolean;
+  newlyAtRiskGoalIds: string[];
+  tightMonthsAfter: number[];
+  effects: { label: string }[];
+};
+
+checks.push(
+  check('E4a', 'medical bill: reports no impact', e4.noImpact, true),
+  check('E4b', 'medical bill: nothing newly at risk', e4.newlyAtRiskGoalIds, []),
+  check('E4c', 'medical bill: no tight months', e4.tightMonthsAfter, []),
+  check('E4d', 'medical bill: one effect line, the bill itself', e4.effects.length, 1),
+  check('E4e', 'the effect line names the amount and month', e4.effects[0]?.label, '$6,000 once in month 3 for the bill')
+);
+
+// --- E5: the baby event ------------------------------------------------
+await b.conn.reducers.createEvent({
+  templateId: 'baby',
+  params: [
+    { key: 'monthsUntilBirth', value: '9' },
+    { key: 'leaveMember', value: String(memberBId) },
+    { key: 'leaveMonths', value: '2' },
+    { key: 'care', value: 'daycare' },
+  ],
+});
+const babyEvent = await waitFor('baby event on A', () =>
+  mine.events(a).find(e => e.templateId === 'baby' && e.status === 'active')
+);
+
+checks.push(
+  check('V1', 'one active event at a time: the medical bill was superseded', mine.events(a).find(e => e.id === medicalEvent.id)?.status, 'dismissed'),
+  check('V2', 'a superseded event drops its stale impact', mine.impacts(a).some(i => i.eventId === medicalEvent.id), false),
+  check('V3', "an event created by B reaches A", babyEvent.createdBy, memberBId)
+);
+
+await b.conn.reducers.computeImpact({ eventId: babyEvent.id });
+const babyImpactRow = await waitFor('baby impact on A', () =>
+  mine.impacts(a).find(i => i.eventId === babyEvent.id)
+);
+const e5 = JSON.parse(babyImpactRow.json) as {
+  noImpact: boolean;
+  newlyAtRiskGoalIds: string[];
+  shortfallsByGoalId: Record<string, number>;
+  tightMonthsAfter: number[];
+  tightYearsBefore: number[];
+  tightYearsAfter: number[];
+  freeToPlanBefore: number;
+  freeToPlanAfter: number;
+  effects: { label: string; cause: string }[];
+  provenance: Record<string, { formulaText: string; result: number; inputs: Record<string, unknown> }>;
+  goalsAfter: { id: string; funded: boolean }[];
+};
+
+const japanGoal = mine.goals(a).find(g => g.title === 'Japan')!;
+const houseGoal = mine.goals(a).find(g => g.title === 'House')!;
+const expectedTightMonths = Array.from({ length: 23 - 9 + 1 }, (_, i) => i + 9);
+
+checks.push(
+  check('E5a', 'baby: Japan is newly at risk', e5.newlyAtRiskGoalIds, [String(japanGoal.id)]),
+  check('E5b', 'baby: Japan shortfall', e5.shortfallsByGoalId[String(japanGoal.id)], 2183.97),
+  check('E5c', 'baby: House still funded', e5.goalsAfter.find(g => g.id === String(houseGoal.id))?.funded, true),
+  check('E5d', 'baby: tight months are 9 through 23', e5.tightMonthsAfter, expectedTightMonths),
+  check('E5e', 'baby: tight years go from none to two', [e5.tightYearsBefore.length, e5.tightYearsAfter.length], [0, 2]),
+  check('E5f', 'baby: it is not a no-impact event', e5.noImpact, false),
+  // The event starts in month 9, so it costs nothing *today* — an honest result
+  // rather than a bug: it breaks a goal two years out.
+  check('E5g', 'baby: free to plan today is unchanged', e5.freeToPlanAfter, e5.freeToPlanBefore),
+
+  // The four attributed effect lines, which are the "why it changed" block.
+  check('E5h', 'baby: four attributed effects', e5.effects.length, 4),
+  check('E5i', 'baby: effects are attributed, not summed', e5.effects.map(x => x.cause), ['unpaid-leave', 'birth', 'raising-a-child', 'daycare']),
+  check('E5j', 'baby: daycare is its own line, not merged into the monthly cost', e5.effects.some(x => x.cause === 'daycare' && x.label.includes('$1,200')), true),
+  check('E5k', 'baby: the leave line names the partner', e5.effects.find(x => x.cause === 'unpaid-leave')?.label.includes('Jordan'), true),
+
+  // Every impact number is explainable.
+  check('E5l', 'impact provenance covers the deltas', ['impact.freeToPlan', 'impact.emergencyMonthsMin', 'impact.tightYears', 'impact.goalsAtRisk'].every(k => e5.provenance[k] !== undefined), true),
+  check('E5m', 'the shortfall has its own provenance record', e5.provenance[`impact.shortfall.${japanGoal.id}`] !== undefined, true),
+  check('E5n', 'impact provenance explains why, not just what', Object.keys(e5.provenance['impact.tightYears']?.inputs ?? {}).some(k => k.startsWith('effect')), true),
+  check('E5o', 'tightYears provenance result is the delta', e5.provenance['impact.tightYears']?.result, 2)
+);
+
+// --- The thread --------------------------------------------------------
+const messages = mine.messages(a);
+checks.push(
+  check('T1', 'the thread records the event and its impact', messages.filter(m => m.kind === 'event' || m.kind === 'impact').length >= 4, true),
+  check('T2', 'the impact message reaches B as well', mine.messages(b).some(m => m.kind === 'impact'), true),
+  check('T3', 'an engine card has no author', messages.find(m => m.kind === 'impact')?.authorMemberId, undefined),
+  check('T4', 'an event entry is attributed to whoever added it', messages.find(m => m.kind === 'event' && m.refId === babyEvent.id)?.authorMemberId, memberBId)
+);
+
+// --- Affordability -----------------------------------------------------
+await a.conn.reducers.checkAffordability({ amountCents: 120000, label: 'couch' });
+const affordMessage = await waitFor('affordability card', () =>
+  mine.messages(a).find(m => m.kind === 'affordability')
+);
+const afford = JSON.parse(affordMessage.payload) as {
+  amount: number;
+  label: string;
+  affordableWithoutChanges: boolean;
+  emergencyMonthsMinBefore: number;
+  emergencyMonthsMinAfter: number;
+  minimalSaveMore: number | null;
+};
+
+checks.push(
+  check('A1', 'affordability records the amount asked about', afford.amount, 1200),
+  check('A2', 'affordability answers in emergency-fund months too', afford.emergencyMonthsMinAfter <= afford.emergencyMonthsMinBefore, true),
+  check('A3', 'a $1,200 couch needs no goal changes', afford.affordableWithoutChanges, true),
+  check('A4', 'an amount of zero is rejected', await rejects(() => a.conn.reducers.checkAffordability({ amountCents: 0, label: 'nothing' })), true)
+);
+
+// A large one-time purchase lands on the **emergency fund**, not on goal
+// contributions: goals draw from the monthly surplus, and 06 Engine Spec's own
+// example answer is "no goal changes; emergency fund goes from 4.2 to 3.9
+// months". So the honest assertion for a big spend is that the safety net
+// collapses and months turn tight, while the goals themselves still complete.
+await a.conn.reducers.checkAffordability({ amountCents: 4000000, label: 'a boat' });
+const bigAfford = await waitFor('big affordability card', () =>
+  mine
+    .messages(a)
+    .filter(m => m.kind === 'affordability')
+    .map(
+      m =>
+        JSON.parse(m.payload) as {
+          amount: number;
+          newlyAtRiskGoalIds: string[];
+          emergencyMonthsMinBefore: number;
+          emergencyMonthsMinAfter: number;
+          tightMonthsBefore: number;
+          tightMonthsAfter: number;
+        }
+    )
+    .find(x => x.amount === 40000)
+);
+
+checks.push(
+  check('A5', 'a $40,000 boat collapses the emergency fund', bigAfford.emergencyMonthsMinAfter < 0, true),
+  check('A6', 'and turns months tight that were not before', [bigAfford.tightMonthsBefore, bigAfford.tightMonthsAfter > 0], [0, true]),
+  check('A7', 'but the goals still complete: a lump sum does not starve them', bigAfford.newlyAtRiskGoalIds, []),
+  check('A8', 'the small purchase moved the fund only slightly', afford.emergencyMonthsMinBefore - afford.emergencyMonthsMinAfter < 1, true)
+);
+
+// --- Dismiss -----------------------------------------------------------
+await a.conn.reducers.dismissEvent({ eventId: babyEvent.id });
+await waitFor('event dismissed on B', () =>
+  mine.events(b).find(e => e.id === babyEvent.id)?.status === 'dismissed' ? true : undefined
+);
+
+checks.push(
+  check('D1', 'dismissing an event marks it dismissed for both', mine.events(b).find(e => e.id === babyEvent.id)?.status, 'dismissed'),
+  check('D2', 'dismissing drops the impact', mine.impacts(a).some(i => i.eventId === babyEvent.id), false),
+  check('D3', 'dismissing leaves the committed plan alone', JSON.parse(mine.projection(a)!.json).atRiskGoalIds, []),
+  check('D4', 'an unknown event is rejected', await rejects(() => a.conn.reducers.computeImpact({ eventId: 999999n })), true)
+);
+
+// ======================================================================
+// 10. Reseed keeps the pairing
 // ======================================================================
 await a.conn.reducers.finishOnboarding();
 await waitFor('onboarded', () =>
@@ -477,7 +673,8 @@ checks.push(
   check('R5', 'reseed keeps the join code', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.joinCode, household.joinCode),
   check('R6', 'reseed keeps the transactions, so inference can re-run', rows.transactions(a).length > 0, true),
   check('R7', 'reseed returns the household to un-onboarded', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.onboarded, false),
-  check('R8', 'reseed clears goals', mine.goals(a).length, 0)
+  check('R8', 'reseed clears goals', mine.goals(a).length, 0),
+  check('R9', 'reseed clears events and the thread', [mine.events(a).length, mine.messages(a).length], [0, 0])
 );
 
 /** True when a reducer call is rejected, which is what we want to assert. */

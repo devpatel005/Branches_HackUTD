@@ -35,10 +35,15 @@ import {
 
 // Import all reducer arg schemas
 import AddGoalReducer from "./add_goal_reducer.ts";
+import AnswerEventParamReducer from "./answer_event_param_reducer.ts";
 import AnswerGapReducer from "./answer_gap_reducer.ts";
+import CheckAffordabilityReducer from "./check_affordability_reducer.ts";
+import ComputeImpactReducer from "./compute_impact_reducer.ts";
 import ConfirmAllMyItemsReducer from "./confirm_all_my_items_reducer.ts";
 import ConfirmItemReducer from "./confirm_item_reducer.ts";
+import CreateEventReducer from "./create_event_reducer.ts";
 import CreateHouseholdReducer from "./create_household_reducer.ts";
+import DismissEventReducer from "./dismiss_event_reducer.ts";
 import EditGoalReducer from "./edit_goal_reducer.ts";
 import EditItemReducer from "./edit_item_reducer.ts";
 import FinishOnboardingReducer from "./finish_onboarding_reducer.ts";
@@ -50,6 +55,7 @@ import ReseedHouseholdReducer from "./reseed_household_reducer.ts";
 import ResetReducer from "./reset_reducer.ts";
 import RunInferenceReducer from "./run_inference_reducer.ts";
 import SeedMockDataReducer from "./seed_mock_data_reducer.ts";
+import SendMessageReducer from "./send_message_reducer.ts";
 import SetAssumptionsReducer from "./set_assumptions_reducer.ts";
 import SetDisplayNameReducer from "./set_display_name_reducer.ts";
 import SetFunMoneyReducer from "./set_fun_money_reducer.ts";
@@ -60,12 +66,15 @@ import SetFunMoneyStatusReducer from "./set_fun_money_status_reducer.ts";
 // Import all table schema definitions
 import AssumptionRow from "./assumption_table.ts";
 import BaselineRow from "./baseline_table.ts";
+import ChatMessageRow from "./chat_message_table.ts";
 import CounterRow from "./counter_table.ts";
 import FunMoneyRow from "./fun_money_table.ts";
 import GapQuestionRow from "./gap_question_table.ts";
 import GoalRow from "./goal_table.ts";
 import HouseholdRow from "./household_table.ts";
+import ImpactRow from "./impact_table.ts";
 import InferredItemRow from "./inferred_item_table.ts";
+import LifeEventRow from "./life_event_table.ts";
 import MemberRow from "./member_table.ts";
 import OnboardingProgressRow from "./onboarding_progress_table.ts";
 import PlanProjectionRow from "./plan_projection_table.ts";
@@ -97,6 +106,20 @@ const tablesSchema = __schema({
       { name: 'baseline_household_id_key', constraint: 'unique', columns: ['householdId'] },
     ],
   }, BaselineRow),
+  chatMessage: __table({
+    name: 'chat_message',
+    indexes: [
+      { accessor: 'householdId', name: 'chat_message_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'chat_message_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'chat_message_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, ChatMessageRow),
   counter: __table({
     name: 'counter',
     indexes: [
@@ -168,6 +191,20 @@ const tablesSchema = __schema({
       { name: 'household_join_code_key', constraint: 'unique', columns: ['joinCode'] },
     ],
   }, HouseholdRow),
+  impact: __table({
+    name: 'impact',
+    indexes: [
+      { accessor: 'eventId', name: 'impact_event_id_idx_btree', algorithm: 'btree', columns: [
+        'eventId',
+      ] },
+      { accessor: 'householdId', name: 'impact_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+    ],
+    constraints: [
+      { name: 'impact_event_id_key', constraint: 'unique', columns: ['eventId'] },
+    ],
+  }, ImpactRow),
   inferredItem: __table({
     name: 'inferred_item',
     indexes: [
@@ -185,6 +222,20 @@ const tablesSchema = __schema({
       { name: 'inferred_item_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, InferredItemRow),
+  lifeEvent: __table({
+    name: 'life_event',
+    indexes: [
+      { accessor: 'householdId', name: 'life_event_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'life_event_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+    ],
+    constraints: [
+      { name: 'life_event_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, LifeEventRow),
   member: __table({
     name: 'member',
     indexes: [
@@ -243,10 +294,15 @@ const tablesSchema = __schema({
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
   __reducerSchema("add_goal", AddGoalReducer),
+  __reducerSchema("answer_event_param", AnswerEventParamReducer),
   __reducerSchema("answer_gap", AnswerGapReducer),
+  __reducerSchema("check_affordability", CheckAffordabilityReducer),
+  __reducerSchema("compute_impact", ComputeImpactReducer),
   __reducerSchema("confirm_all_my_items", ConfirmAllMyItemsReducer),
   __reducerSchema("confirm_item", ConfirmItemReducer),
+  __reducerSchema("create_event", CreateEventReducer),
   __reducerSchema("create_household", CreateHouseholdReducer),
+  __reducerSchema("dismiss_event", DismissEventReducer),
   __reducerSchema("edit_goal", EditGoalReducer),
   __reducerSchema("edit_item", EditItemReducer),
   __reducerSchema("finish_onboarding", FinishOnboardingReducer),
@@ -258,6 +314,7 @@ const reducersSchema = __reducers(
   __reducerSchema("reset", ResetReducer),
   __reducerSchema("run_inference", RunInferenceReducer),
   __reducerSchema("seed_mock_data", SeedMockDataReducer),
+  __reducerSchema("send_message", SendMessageReducer),
   __reducerSchema("set_assumptions", SetAssumptionsReducer),
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("set_fun_money", SetFunMoneyReducer),

@@ -32,6 +32,20 @@ export const Baseline = __t.object("Baseline", {
 });
 export type Baseline = __Infer<typeof Baseline>;
 
+export const ChatMessage = __t.object("ChatMessage", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  sessionId: __t.option(__t.u64()),
+  authorMemberId: __t.option(__t.u64()),
+  kind: __t.string(),
+  text: __t.string(),
+  chips: __t.array(__t.string()),
+  refId: __t.option(__t.u64()),
+  payload: __t.string(),
+  createdAt: __t.timestamp(),
+});
+export type ChatMessage = __Infer<typeof ChatMessage>;
+
 export const Counter = __t.object("Counter", {
   id: __t.u32(),
   value: __t.u32(),
@@ -87,6 +101,14 @@ export const Household = __t.object("Household", {
 });
 export type Household = __Infer<typeof Household>;
 
+export const Impact = __t.object("Impact", {
+  eventId: __t.u64(),
+  householdId: __t.u64(),
+  json: __t.string(),
+  computedAt: __t.timestamp(),
+});
+export type Impact = __Infer<typeof Impact>;
+
 export const InferredItem = __t.object("InferredItem", {
   id: __t.u64(),
   householdId: __t.u64(),
@@ -99,6 +121,17 @@ export const InferredItem = __t.object("InferredItem", {
   sortIndex: __t.i32(),
 });
 export type InferredItem = __Infer<typeof InferredItem>;
+
+export const LifeEvent = __t.object("LifeEvent", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  templateId: __t.string(),
+  params: __t.string(),
+  status: __t.string(),
+  createdBy: __t.u64(),
+  createdAt: __t.timestamp(),
+});
+export type LifeEvent = __Infer<typeof LifeEvent>;
 
 export const Member = __t.object("Member", {
   id: __t.u64(),
@@ -134,6 +167,12 @@ export type MemberProgress = __Infer<typeof MemberProgress>;
 
 export const OnboardingProgress = __t.object("OnboardingProgress", {});
 export type OnboardingProgress = __Infer<typeof OnboardingProgress>;
+
+export const ParamEntry = __t.object("ParamEntry", {
+  key: __t.string(),
+  value: __t.string(),
+});
+export type ParamEntry = __Infer<typeof ParamEntry>;
 
 export const PlanProjection = __t.object("PlanProjection", {
   householdId: __t.u64(),
