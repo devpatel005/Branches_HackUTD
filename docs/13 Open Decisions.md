@@ -23,3 +23,4 @@ Claude Code: use the **default** for each item, mark code with `// OPEN(OD-x)`, 
 | OD-14 | Final color values and app icon | Tokens in [[09 Design System]] | UI teammate |
 | OD-15 | Existing savings earmarked for goals | Goals start at $0 balance | Stage 3 |
 | OD-16 | Third Devpost track | NVIDIA (Photon only if stronger) | Before submission |
+| OD-17 | Rounding ties on negative money | Half away from zero, so `toCents(-x) === -toCents(x)` — see [[15 Money and Rounding]] | Before Stage 1 goldens settle |
