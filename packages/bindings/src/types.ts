@@ -10,6 +10,22 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
+export const AgentJob = __t.object("AgentJob", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  sessionId: __t.option(__t.u64()),
+  kind: __t.string(),
+  input: __t.string(),
+  status: __t.string(),
+  progressText: __t.string(),
+  result: __t.string(),
+  attempts: __t.i32(),
+  modelUsed: __t.string(),
+  promptMessageId: __t.option(__t.u64()),
+  createdAt: __t.timestamp(),
+});
+export type AgentJob = __Infer<typeof AgentJob>;
+
 export const Assumption = __t.object("Assumption", {
   householdId: __t.u64(),
   savingsRateBps: __t.i32(),
@@ -55,6 +71,13 @@ export const BranchCandidate = __t.object("BranchCandidate", {
   shownAt: __t.option(__t.timestamp()),
 });
 export type BranchCandidate = __Infer<typeof BranchCandidate>;
+
+export const BranchPick = __t.object("BranchPick", {
+  candidateId: __t.u64(),
+  name: __t.string(),
+  summary: __t.string(),
+});
+export type BranchPick = __Infer<typeof BranchPick>;
 
 export const ChatMessage = __t.object("ChatMessage", {
   id: __t.u64(),

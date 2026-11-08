@@ -48,3 +48,7 @@ apps/mobile/expo-env.d.ts
 # SpacetimeDB module build output + local server config
 server/spacetime/dist/
 spacetime.local.json
+
+# Agent prompt logs (development only)
+services/agent/.agent-prompts*.log
+scripts/verify/.agent-prompts*.log

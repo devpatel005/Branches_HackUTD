@@ -28,7 +28,7 @@ const SUITES: Suite[] = [
   { name: 'V3 Inference', script: 'inference.ts', stage: 'Stage 2' },
   { name: 'Stage 0 data path', script: 'stdb.ts', requiresServer: true, stage: 'Stage 0' },
   { name: 'V4 Data flow', script: 'flow.ts', requiresServer: true, stage: 'Stage 2-5' },
-  // Stage 6: { name: 'V5 Agent contract', script: 'agent.ts', stage: 'Stage 6' },
+  { name: 'V5 Agent contract', script: 'agent.ts', stage: 'Stage 6' },
 ];
 
 const BOLD = '\x1b[1m';

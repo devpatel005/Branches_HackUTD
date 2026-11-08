@@ -20,6 +20,7 @@ import {
   SAVE_MORE_STEP,
   simulate as simulateWithEngine,
   EVENT_TEMPLATES,
+  askedParams,
   inferBaseline,
   isLiquidSavingsQuestion,
   liquidSavingsFromRange,
@@ -46,6 +47,7 @@ import {
   generateTestHouseholdA,
 } from '@branches/mock-data';
 import spacetimedb from './schema.ts';
+import { AGENT_SHARED_SECRET } from './agent-secret.ts';
 
 /**
  * Branches reducers.
@@ -768,6 +770,9 @@ export const reseedHousehold = spacetimedb.reducer(ctx => {
   }
   const commitment = ctx.db.planCommitment.householdId.find(householdId);
   if (commitment) ctx.db.planCommitment.householdId.delete(householdId);
+  for (const row of [...ctx.db.agentJob.householdId.filter(householdId)]) {
+    ctx.db.agentJob.id.delete(row.id);
+  }
   const projection = ctx.db.planProjection.householdId.find(householdId);
   if (projection) ctx.db.planProjection.householdId.delete(householdId);
 
@@ -992,7 +997,21 @@ export const answerEventParam = spacetimedb.reducer(
       ...current,
       ...viaEngine(() => parseParams(event.templateId as LifeEventTemplateId, [{ key, value }])),
     };
-    ctx.db.lifeEvent.id.update({ ...event, params: JSON.stringify(merged) });
+
+    // Promote the event once nothing is outstanding.
+    //
+    // The agent creates an event as a `draft` while it still has follow-ups, so
+    // an impact is never computed from half-known parameters. Something has to
+    // clear that, or the status is decorative — and the UI could not tell "still
+    // asking" from "ready".
+    const outstanding = askedParams(event.templateId as LifeEventTemplateId).filter(
+      param => merged[param] === undefined
+    );
+    ctx.db.lifeEvent.id.update({
+      ...event,
+      params: JSON.stringify(merged),
+      status: event.status === 'draft' && outstanding.length === 0 ? 'active' : event.status,
+    });
   }
 );
 
@@ -1142,12 +1161,64 @@ export const sendMessage = spacetimedb.reducer({ text: t.string() }, (ctx, { tex
   const trimmed = text.trim();
   if (!trimmed) throw new SenderError('a message cannot be empty');
   if (trimmed.length > 1000) throw new SenderError('that message is too long');
-  postMessage(ctx, caller.householdId, {
+
+  const message = ctx.db.chatMessage.insert({
+    id: 0n,
+    householdId: caller.householdId,
+    sessionId: undefined,
+    authorMemberId: caller.id,
     kind: 'text',
     text: trimmed,
-    authorMemberId: caller.id,
+    chips: [],
+    refId: undefined,
+    payload: '',
+    createdAt: ctx.timestamp,
+  });
+
+  // Queue work for the agent rather than calling it: reducers cannot make
+  // outbound HTTP calls, and the bus is what lets both partners watch the
+  // agent think (04 Architecture#Message bus pattern).
+  //
+  // If no agent is registered the job simply sits queued and the app stays
+  // fully usable through the forms — the demo must work with the agent off
+  // (07 Agent Spec#Deterministic fallbacks).
+  const openSession = [...ctx.db.session.householdId.filter(caller.householdId)].find(
+    x => x.status === 'open'
+  );
+  queueJob(ctx, caller.householdId, {
+    kind: openSession ? 'translate_feedback' : 'interpret_event',
+    input: { text: trimmed, memberId: String(caller.id) },
+    sessionId: openSession?.id,
+    promptMessageId: message.id,
   });
 });
+
+function queueJob(
+  ctx: Ctx,
+  householdId: bigint,
+  job: {
+    kind: string;
+    input: unknown;
+    sessionId?: bigint;
+    promptMessageId?: bigint;
+  }
+): bigint {
+  const row = ctx.db.agentJob.insert({
+    id: 0n,
+    householdId,
+    sessionId: job.sessionId,
+    kind: job.kind,
+    input: JSON.stringify(job.input),
+    status: 'queued',
+    progressText: '',
+    result: '',
+    attempts: 0,
+    modelUsed: '',
+    promptMessageId: job.promptMessageId,
+    createdAt: ctx.timestamp,
+  });
+  return row.id;
+}
 
 // ---------------------------------------------------------------------------
 // Goals and assumptions (Stage 3)
@@ -1740,6 +1811,339 @@ export const closeSession = spacetimedb.reducer({ sessionId: t.u64() }, (ctx, { 
   // The event stays active so the session can be resumed (08 Live Session Spec).
   ctx.db.session.id.update({ ...sessionRow, status: 'closed' });
 });
+
+// ---------------------------------------------------------------------------
+// The agent (Stage 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Agent-only reducers reject anyone whose member role is not `agent`
+ * (02 Ground Rules #4). Together with `requireHuman` on every plan-changing
+ * reducer, this is what makes "the agent proposes; humans decide" structural
+ * rather than a convention.
+ */
+function requireAgent(ctx: Ctx) {
+  const m = ctx.db.member.identity.find(ctx.sender);
+  if (!m || m.role !== 'agent') throw new SenderError('agent only');
+  return m;
+}
+
+/**
+ * The agent service claims the `agent` role for a household by presenting a
+ * shared secret (see agent-secret.ts for why it is a module constant).
+ *
+ * Idempotent: a reconnecting service with the same identity re-registers
+ * harmlessly, which matters because the service persists its token and will
+ * reconnect across restarts.
+ */
+export const registerAgent = spacetimedb.reducer(
+  { joinCode: t.string(), secret: t.string() },
+  (ctx, { joinCode, secret }) => {
+    if (secret !== AGENT_SHARED_SECRET) throw new SenderError('wrong agent secret');
+
+    const household = ctx.db.household.joinCode.find(joinCode.trim().toUpperCase());
+    if (!household) throw new SenderError('no household with that code');
+
+    const existing = ctx.db.member.identity.find(ctx.sender);
+    if (existing) {
+      if (existing.householdId === household.id) {
+        ctx.db.member.id.update({
+          ...existing,
+          role: 'agent',
+          online: true,
+          lastSeenAt: ctx.timestamp,
+        });
+        return;
+      }
+      // An **agent** may move between households: one service serving whichever
+      // household exists is normal in development, and on a dev database with
+      // leftovers it must be able to follow the live one. A human may not —
+      // that would let someone walk out of their own plan.
+      if (existing.role !== 'agent') {
+        throw new SenderError('this identity already belongs to another household');
+      }
+      ctx.db.member.id.delete(existing.id);
+    }
+
+    const alreadyAgent = [...ctx.db.member.householdId.filter(household.id)].find(
+      m => m.role === 'agent'
+    );
+    if (alreadyAgent) {
+      // Replace the old agent identity: a restarted service without its token
+      // would otherwise be locked out of its own household.
+      ctx.db.member.id.delete(alreadyAgent.id);
+    }
+
+    ctx.db.member.insert({
+      id: 0n,
+      householdId: household.id,
+      identity: ctx.sender,
+      displayName: 'Branches',
+      colorKey: 'agent',
+      role: 'agent',
+      online: true,
+      lastSeenAt: ctx.timestamp,
+    });
+  }
+);
+
+/** Take a queued job. One at a time per household, in creation order. */
+export const claimJob = spacetimedb.reducer({ jobId: t.u64() }, (ctx, { jobId }) => {
+  const agent = requireAgent(ctx);
+  const job = ctx.db.agentJob.id.find(jobId);
+  if (!job) throw new SenderError('job not found');
+  if (job.householdId !== agent.householdId) throw new SenderError('not your household');
+  if (job.status !== 'queued') throw new SenderError('that job is not queued');
+
+  // Jobs are processed one at a time per household (07 Agent Spec#Job flow), so
+  // a running job blocks the next claim rather than racing it.
+  const running = [...ctx.db.agentJob.householdId.filter(job.householdId)].find(
+    x => x.status === 'running'
+  );
+  if (running) throw new SenderError('another job is already running');
+
+  ctx.db.agentJob.id.update({ ...job, status: 'running', attempts: job.attempts + 1 });
+});
+
+/** Progress text, shown live on every screen. */
+export const setJobProgress = spacetimedb.reducer(
+  { jobId: t.u64(), progressText: t.string() },
+  (ctx, { jobId, progressText }) => {
+    const agent = requireAgent(ctx);
+    const job = ctx.db.agentJob.id.find(jobId);
+    if (!job || job.householdId !== agent.householdId) throw new SenderError('job not found');
+    ctx.db.agentJob.id.update({ ...job, progressText: progressText.slice(0, 200) });
+  }
+);
+
+export const completeJob = spacetimedb.reducer(
+  { jobId: t.u64(), result: t.string(), modelUsed: t.string() },
+  (ctx, { jobId, result, modelUsed }) => {
+    const agent = requireAgent(ctx);
+    const job = ctx.db.agentJob.id.find(jobId);
+    if (!job || job.householdId !== agent.householdId) throw new SenderError('job not found');
+    ctx.db.agentJob.id.update({
+      ...job,
+      status: 'done',
+      result: result.slice(0, 20000),
+      modelUsed,
+      progressText: '',
+    });
+  }
+);
+
+export const failJob = spacetimedb.reducer(
+  { jobId: t.u64(), reason: t.string() },
+  (ctx, { jobId, reason }) => {
+    const agent = requireAgent(ctx);
+    const job = ctx.db.agentJob.id.find(jobId);
+    if (!job || job.householdId !== agent.householdId) throw new SenderError('job not found');
+    ctx.db.agentJob.id.update({
+      ...job,
+      status: 'failed',
+      result: reason.slice(0, 2000),
+      progressText: '',
+    });
+  }
+);
+
+/** A message authored by the agent, with optional tap-able follow-up chips. */
+export const postAgentMessage = spacetimedb.reducer(
+  { text: t.string(), chips: t.array(t.string()), refId: t.option(t.u64()) },
+  (ctx, { text, chips, refId }) => {
+    const agent = requireAgent(ctx);
+    ctx.db.chatMessage.insert({
+      id: 0n,
+      householdId: agent.householdId,
+      sessionId: undefined,
+      authorMemberId: agent.id,
+      kind: 'text',
+      text: text.slice(0, 2000),
+      chips: chips.slice(0, 6),
+      refId,
+      payload: '',
+      createdAt: ctx.timestamp,
+    });
+  }
+);
+
+/**
+ * The agent's three picks, with names and summaries
+ * (07 Agent Spec#Tasks and tools).
+ *
+ * The agent may only **select and name** candidates the engine already
+ * generated — it cannot invent a path. Passing an id that is not a candidate of
+ * this session is rejected, which is the structural half of "the AI never
+ * computes numbers" (02 Ground Rules #1).
+ */
+const BranchPick = t.object('BranchPick', {
+  candidateId: t.u64(),
+  name: t.string(),
+  summary: t.string(),
+});
+
+export const nameBranches = spacetimedb.reducer(
+  { sessionId: t.u64(), picks: t.array(BranchPick) },
+  (ctx, { sessionId, picks }) => {
+    const agent = requireAgent(ctx);
+    const sessionRow = ctx.db.session.id.find(sessionId);
+    if (!sessionRow || sessionRow.householdId !== agent.householdId) {
+      throw new SenderError('session not found');
+    }
+    if (picks.length !== BRANCHES_SHOWN) {
+      throw new SenderError(`expected ${BRANCHES_SHOWN} picks, got ${picks.length}`);
+    }
+
+    const candidates = new Map(
+      [...ctx.db.branchCandidate.sessionId.filter(sessionId)].map(c => [c.id, c])
+    );
+    const seen = new Set<string>();
+    for (const pick of picks) {
+      if (!candidates.has(pick.candidateId)) {
+        throw new SenderError('that is not a candidate of this session');
+      }
+      if (seen.has(String(pick.candidateId))) throw new SenderError('duplicate pick');
+      seen.add(String(pick.candidateId));
+      if (pick.name.length > 30) throw new SenderError('a branch name is at most 30 characters');
+      if (pick.summary.length > 200) throw new SenderError('a summary is at most 200 characters');
+    }
+
+    for (const row of [...ctx.db.branch.sessionId.filter(sessionId)]) {
+      ctx.db.branch.id.delete(row.id);
+    }
+    picks.forEach((pick, index) => {
+      const candidate = candidates.get(pick.candidateId)!;
+      ctx.db.branchCandidate.id.update({ ...candidate, shownAt: ctx.timestamp });
+      ctx.db.branch.insert({
+        id: 0n,
+        sessionId,
+        candidateId: pick.candidateId,
+        name: pick.name,
+        summary: pick.summary,
+        nameSource: 'agent',
+        position: index,
+      });
+    });
+  }
+);
+
+/**
+ * Create a life event from the agent's classification, and post the follow-ups
+ * it still needs as chips.
+ *
+ * The agent chooses a template and fills parameters it was *told*; it never
+ * computes an effect. Validation of the parameters themselves still happens in
+ * the engine when the impact is computed.
+ */
+export const applyEventInterpretation = spacetimedb.reducer(
+  {
+    templateId: t.string(),
+    params: t.array(ParamEntry),
+    followUpPrompt: t.string(),
+    followUpChips: t.array(t.string()),
+  },
+  (ctx, { templateId, params, followUpPrompt, followUpChips }) => {
+    const agent = requireAgent(ctx);
+    const template = EVENT_TEMPLATES[templateId as LifeEventTemplateId];
+    if (!template) throw new SenderError(`unknown event: ${templateId}`);
+
+    const existing = activeEventFor(ctx, agent.householdId);
+    if (existing) {
+      ctx.db.lifeEvent.id.update({ ...existing, status: 'dismissed' });
+      const staleImpact = ctx.db.impact.eventId.find(existing.id);
+      if (staleImpact) ctx.db.impact.eventId.delete(existing.id);
+    }
+
+    const event = ctx.db.lifeEvent.insert({
+      id: 0n,
+      householdId: agent.householdId,
+      templateId,
+      params: JSON.stringify(
+        viaEngine(() => parseParams(templateId as LifeEventTemplateId, params))
+      ),
+      // `draft` while follow-ups are outstanding: an impact computed from
+      // half-known parameters would be worse than none.
+      status: followUpPrompt.trim() ? 'draft' : 'active',
+      createdBy: agent.id,
+      createdAt: ctx.timestamp,
+    });
+
+    ctx.db.chatMessage.insert({
+      id: 0n,
+      householdId: agent.householdId,
+      sessionId: undefined,
+      authorMemberId: agent.id,
+      kind: followUpPrompt.trim() ? 'text' : 'event',
+      text: followUpPrompt.trim() || template.label,
+      chips: followUpChips.slice(0, 6),
+      refId: event.id,
+      payload: '',
+      createdAt: ctx.timestamp,
+    });
+  }
+);
+
+/**
+ * Turn typed feedback into constraints — "don't delay the house, we can cut
+ * eating out" becomes a lock plus a saveMore allowance
+ * (07 Agent Spec#Tasks and tools).
+ *
+ * The agent translates intent into the engine's own constraint shapes. It does
+ * not choose a path; the engine rerolls and the couple still decides.
+ */
+export const applyConstraintTranslation = spacetimedb.reducer(
+  { sessionId: t.u64(), memberId: t.u64(), targets: t.array(t.string()) },
+  (ctx, { sessionId, memberId, targets }) => {
+    const agent = requireAgent(ctx);
+    const sessionRow = ctx.db.session.id.find(sessionId);
+    if (!sessionRow || sessionRow.householdId !== agent.householdId) {
+      throw new SenderError('session not found');
+    }
+    const onBehalfOf = ctx.db.member.id.find(memberId);
+    if (!onBehalfOf || onBehalfOf.householdId !== agent.householdId) {
+      throw new SenderError('member not found');
+    }
+
+    const allowed = ['goalOnTime', 'goalFullSize', 'noExtraSaving', 'saveMoreAtMost'];
+    for (const target of targets.slice(0, 4)) {
+      const parsed = viaEngine(() => JSON.parse(target) as { kind: string });
+      if (!allowed.includes(parsed.kind)) throw new SenderError(`unknown constraint: ${parsed.kind}`);
+      ctx.db.constraint.insert({
+        id: 0n,
+        sessionId,
+        // Recorded as the member's lock, not the agent's: the constraint is
+        // theirs, the agent only read it out of a sentence.
+        memberId,
+        kind: 'lock',
+        target: JSON.stringify(parsed),
+        active: true,
+      });
+    }
+  }
+);
+
+/** Queue work the app cannot queue itself, e.g. naming a fresh batch. */
+export const requestBranchNaming = spacetimedb.reducer(
+  { sessionId: t.u64() },
+  (ctx, { sessionId }) => {
+    const caller = requireHuman(ctx);
+    const sessionRow = sessionOrReject(ctx, sessionId, caller.householdId);
+    const candidates = [...ctx.db.branchCandidate.sessionId.filter(sessionId)]
+      .filter(c => c.shownAt !== undefined && c.shownAt !== null)
+      .map(c => ({
+        candidateId: String(c.id),
+        signature: c.signature,
+        stats: JSON.parse(c.stats) as unknown,
+      }));
+    if (candidates.length === 0) throw new SenderError('no candidates to name');
+
+    queueJob(ctx, caller.householdId, {
+      kind: 'select_branches',
+      input: { candidates },
+      sessionId: sessionRow.id,
+    });
+  }
+);
 
 // ---------------------------------------------------------------------------
 // Stage 0 sync canary — see schema.ts

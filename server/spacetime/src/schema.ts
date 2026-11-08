@@ -378,6 +378,40 @@ export const planCommitment = table(
 );
 
 /**
+ * The bus between the app and the agent service (04 Architecture#Message bus).
+ *
+ * The app never calls the agent. It queues a job; the service — an ordinary
+ * SpacetimeDB client with no public URL — picks it up, writes progress as it
+ * goes, and writes results back through agent-only reducers. Every subscribed
+ * client sees the progress and the result live, which is what makes "Building
+ * branch 2 of 3..." appear on both partners' screens at once.
+ */
+export const agentJob = table(
+  { name: 'agent_job', public: true },
+  {
+    id: t.u64().primaryKey().autoInc(),
+    householdId: t.u64().index('btree'),
+    sessionId: t.option(t.u64()),
+    /** interpret_event | select_branches | translate_feedback | affordability | explain | general_chat */
+    kind: t.string(),
+    /** Task-specific input as JSON. */
+    input: t.string(),
+    /** `queued` | `running` | `done` | `failed`. */
+    status: t.string().index('btree'),
+    /** Shown live on both screens: "Reading your event...". */
+    progressText: t.string(),
+    result: t.string(),
+    /** Retries used. The spec allows one retry per tier before failing over. */
+    attempts: t.i32(),
+    /** Which model answered, so a failover is visible after the fact. */
+    modelUsed: t.string(),
+    /** The message that prompted this job, for threading the reply. */
+    promptMessageId: t.option(t.u64()),
+    createdAt: t.timestamp(),
+  }
+);
+
+/**
  * Stage 0's sync canary, kept deliberately.
  *
  * `verify:stdb` uses it as a stale-publish detector: the reducer recomputes
@@ -414,6 +448,7 @@ const spacetimedb = schema({
   branch,
   constraint,
   planCommitment,
+  agentJob,
   counter,
 });
 

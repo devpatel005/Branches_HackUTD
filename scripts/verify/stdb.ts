@@ -58,9 +58,11 @@ function subscribeCounter(client: Client): Promise<void> {
         clearTimeout(timer);
         resolve();
       })
-      .onError((_ctx, error) => {
+      // The subscription builder's onError takes one argument; the error
+      // arrives on the context, not as a second parameter.
+      .onError(ctx => {
         clearTimeout(timer);
-        reject(error);
+        reject(ctx.event ?? new Error('subscription failed'));
       })
       .subscribe(['SELECT * FROM counter']);
   });
@@ -106,7 +108,7 @@ checks.push(
 // A calls the reducer; B must observe it through its own subscription.
 const target = before.value + 1;
 const observed = waitForValue(b, target);
-await a.conn.reducers.increment();
+await a.conn.reducers.increment({});
 const seenByB = await observed;
 
 checks.push(

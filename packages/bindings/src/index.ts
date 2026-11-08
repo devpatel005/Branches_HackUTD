@@ -38,9 +38,13 @@ import AddConstraintReducer from "./add_constraint_reducer.ts";
 import AddGoalReducer from "./add_goal_reducer.ts";
 import AnswerEventParamReducer from "./answer_event_param_reducer.ts";
 import AnswerGapReducer from "./answer_gap_reducer.ts";
+import ApplyConstraintTranslationReducer from "./apply_constraint_translation_reducer.ts";
+import ApplyEventInterpretationReducer from "./apply_event_interpretation_reducer.ts";
 import CheckAffordabilityReducer from "./check_affordability_reducer.ts";
+import ClaimJobReducer from "./claim_job_reducer.ts";
 import CloseSessionReducer from "./close_session_reducer.ts";
 import CommitBranchReducer from "./commit_branch_reducer.ts";
+import CompleteJobReducer from "./complete_job_reducer.ts";
 import ComputeImpactReducer from "./compute_impact_reducer.ts";
 import ConfirmAllMyItemsReducer from "./confirm_all_my_items_reducer.ts";
 import ConfirmItemReducer from "./confirm_item_reducer.ts";
@@ -49,13 +53,18 @@ import CreateHouseholdReducer from "./create_household_reducer.ts";
 import DismissEventReducer from "./dismiss_event_reducer.ts";
 import EditGoalReducer from "./edit_goal_reducer.ts";
 import EditItemReducer from "./edit_item_reducer.ts";
+import FailJobReducer from "./fail_job_reducer.ts";
 import FinishOnboardingReducer from "./finish_onboarding_reducer.ts";
 import GenerateCandidatesReducer from "./generate_candidates_reducer.ts";
 import IncrementReducer from "./increment_reducer.ts";
 import JoinHouseholdReducer from "./join_household_reducer.ts";
+import NameBranchesReducer from "./name_branches_reducer.ts";
+import PostAgentMessageReducer from "./post_agent_message_reducer.ts";
+import RegisterAgentReducer from "./register_agent_reducer.ts";
 import RejectItemReducer from "./reject_item_reducer.ts";
 import RemoveConstraintReducer from "./remove_constraint_reducer.ts";
 import RemoveGoalReducer from "./remove_goal_reducer.ts";
+import RequestBranchNamingReducer from "./request_branch_naming_reducer.ts";
 import RequestBridgeReducer from "./request_bridge_reducer.ts";
 import RerollReducer from "./reroll_reducer.ts";
 import ReseedHouseholdReducer from "./reseed_household_reducer.ts";
@@ -67,12 +76,14 @@ import SetAssumptionsReducer from "./set_assumptions_reducer.ts";
 import SetDisplayNameReducer from "./set_display_name_reducer.ts";
 import SetFunMoneyReducer from "./set_fun_money_reducer.ts";
 import SetFunMoneyStatusReducer from "./set_fun_money_status_reducer.ts";
+import SetJobProgressReducer from "./set_job_progress_reducer.ts";
 import StartSessionReducer from "./start_session_reducer.ts";
 import TuneLeverReducer from "./tune_lever_reducer.ts";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AgentJobRow from "./agent_job_table.ts";
 import AssumptionRow from "./assumption_table.ts";
 import BaselineRow from "./baseline_table.ts";
 import BranchRow from "./branch_table.ts";
@@ -98,6 +109,23 @@ import TransactionRow from "./transaction_table.ts";
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  agentJob: __table({
+    name: 'agent_job',
+    indexes: [
+      { accessor: 'householdId', name: 'agent_job_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'agent_job_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'status', name: 'agent_job_status_idx_btree', algorithm: 'btree', columns: [
+        'status',
+      ] },
+    ],
+    constraints: [
+      { name: 'agent_job_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, AgentJobRow),
   assumption: __table({
     name: 'assumption',
     indexes: [
@@ -381,9 +409,13 @@ const reducersSchema = __reducers(
   __reducerSchema("add_goal", AddGoalReducer),
   __reducerSchema("answer_event_param", AnswerEventParamReducer),
   __reducerSchema("answer_gap", AnswerGapReducer),
+  __reducerSchema("apply_constraint_translation", ApplyConstraintTranslationReducer),
+  __reducerSchema("apply_event_interpretation", ApplyEventInterpretationReducer),
   __reducerSchema("check_affordability", CheckAffordabilityReducer),
+  __reducerSchema("claim_job", ClaimJobReducer),
   __reducerSchema("close_session", CloseSessionReducer),
   __reducerSchema("commit_branch", CommitBranchReducer),
+  __reducerSchema("complete_job", CompleteJobReducer),
   __reducerSchema("compute_impact", ComputeImpactReducer),
   __reducerSchema("confirm_all_my_items", ConfirmAllMyItemsReducer),
   __reducerSchema("confirm_item", ConfirmItemReducer),
@@ -392,13 +424,18 @@ const reducersSchema = __reducers(
   __reducerSchema("dismiss_event", DismissEventReducer),
   __reducerSchema("edit_goal", EditGoalReducer),
   __reducerSchema("edit_item", EditItemReducer),
+  __reducerSchema("fail_job", FailJobReducer),
   __reducerSchema("finish_onboarding", FinishOnboardingReducer),
   __reducerSchema("generate_candidates", GenerateCandidatesReducer),
   __reducerSchema("increment", IncrementReducer),
   __reducerSchema("join_household", JoinHouseholdReducer),
+  __reducerSchema("name_branches", NameBranchesReducer),
+  __reducerSchema("post_agent_message", PostAgentMessageReducer),
+  __reducerSchema("register_agent", RegisterAgentReducer),
   __reducerSchema("reject_item", RejectItemReducer),
   __reducerSchema("remove_constraint", RemoveConstraintReducer),
   __reducerSchema("remove_goal", RemoveGoalReducer),
+  __reducerSchema("request_branch_naming", RequestBranchNamingReducer),
   __reducerSchema("request_bridge", RequestBridgeReducer),
   __reducerSchema("reroll", RerollReducer),
   __reducerSchema("reseed_household", ReseedHouseholdReducer),
@@ -410,6 +447,7 @@ const reducersSchema = __reducers(
   __reducerSchema("set_display_name", SetDisplayNameReducer),
   __reducerSchema("set_fun_money", SetFunMoneyReducer),
   __reducerSchema("set_fun_money_status", SetFunMoneyStatusReducer),
+  __reducerSchema("set_job_progress", SetJobProgressReducer),
   __reducerSchema("start_session", StartSessionReducer),
   __reducerSchema("tune_lever", TuneLeverReducer),
 );

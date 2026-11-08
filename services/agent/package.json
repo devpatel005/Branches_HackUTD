@@ -6,12 +6,23 @@
   "type": "module",
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/index.ts",
+    "mock": "node --disable-warning=ExperimentalWarning src/mock-server.ts",
     "smoke": "node --disable-warning=ExperimentalWarning src/smoke.ts",
-    "smoke:live": "BRANCHES_AGENT_MODE=live node --disable-warning=ExperimentalWarning src/smoke.ts"
+    "smoke:live": "BRANCHES_AGENT_MODE=live node --disable-warning=ExperimentalWarning src/smoke.ts",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "openai": "^4.77.0",
+    "@branches/engine": "*",
     "@branches/bindings": "*",
-    "spacetimedb": "2.14.*"
+    "@branches/mock-data": "*",
+    "spacetimedb": "2.14.*",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.6.2"
+  },
+  "exports": {
+    "./src/*": "./src/*"
   }
 }

@@ -101,11 +101,20 @@ On a physical phone, `127.0.0.1` is the phone itself. Set
 `EXPO_PUBLIC_SPACETIME_HOST` to your laptop's LAN IP, or publish to Maincloud.
 
 ### Agent service
+No API key? The bundled mock exercises the whole path — bus, claim, progress,
+all four validation gates, retry, failover and the fallbacks:
 ```bash
-npm run agent:smoke                        # recorded mode, no network
-npm run -w @branches/agent smoke:live      # real Nemotron call (needs NVIDIA_API_KEY)
-npm run agent                              # the service (Stage 6)
+npm run agent:mock                                            # terminal 1
+AGENT_BASE_URL=http://127.0.0.1:8099/v1 npm run agent         # terminal 2
 ```
+With a real provider — Nemotron by default, or any OpenAI-compatible endpoint:
+```bash
+NVIDIA_API_KEY=... npm run agent
+AGENT_BASE_URL=https://api.openai.com/v1 AGENT_MODEL=gpt-4o-mini AGENT_API_KEY=sk-... npm run agent
+npm run -w @branches/agent smoke                              # is my endpoint working?
+```
+The module checks a shared secret before granting the `agent` role; it lives in
+`server/spacetime/src/agent-secret.ts` and must match `AGENT_SECRET`.
 
 ### Verification ([[12 Verification]])
 ```bash
@@ -116,6 +125,9 @@ npm run verify:purity       # engine uses no time, randomness or I/O
 npm run verify:inference    # V3 Inference — the expected table from 11 Mock Data
 npm run verify:stdb         # Stage 0 data path (needs a published module)
 npm run verify:flow         # V4 Data flow — two clients through onboarding (needs a module)
+npm run verify:agent        # V5 Agent contract — validation gates, allowlist, fallbacks
+BRANCHES_AGENT_MODE=mock npm run verify:agent   # ...plus retry and failover over real HTTP
+npm run verify:agent:e2e    # the real service over the real bus (needs the mock + agent running)
 npm run verify:selftest     # proves the harness reports failures (exits 1 by design)
 npm run typecheck           # engine + module + app
 ```

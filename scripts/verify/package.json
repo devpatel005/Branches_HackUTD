@@ -12,12 +12,21 @@
     "verify:engine": "node --disable-warning=ExperimentalWarning engine.ts",
     "verify:purity": "node --disable-warning=ExperimentalWarning purity.ts",
     "verify:inference": "node --disable-warning=ExperimentalWarning inference.ts",
-    "verify:flow": "node --disable-warning=ExperimentalWarning flow.ts"
+    "verify:flow": "node --disable-warning=ExperimentalWarning flow.ts",
+    "verify:agent": "node --disable-warning=ExperimentalWarning agent.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "verify:agent:e2e": "node --disable-warning=ExperimentalWarning agent-e2e.ts"
   },
   "dependencies": {
     "@branches/engine": "*",
     "@branches/bindings": "*",
     "spacetimedb": "2.14.*",
-    "@branches/mock-data": "*"
+    "@branches/mock-data": "*",
+    "@branches/agent": "*",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.6.2"
   }
 }

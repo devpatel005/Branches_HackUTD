@@ -25,3 +25,4 @@ Claude Code: use the **default** for each item, mark code with `// OPEN(OD-x)`, 
 | OD-16 | Third Devpost track | NVIDIA (Photon only if stronger) | Before submission |
 | OD-17 | Rounding ties on negative money | Half away from zero, so `toCents(-x) === -toCents(x)` — see [[15 Money and Rounding]] | Before Stage 1 goldens settle |
 | OD-18 | Dev and demo platform | Expo web on a laptop for development; phone via Expo Go deferred — see [[16 Dev Environment]] | Before Stage 7 (V6 needs two devices) |
+| OD-19 | How the agent's shared secret is supplied | A module constant in `server/spacetime/src/agent-secret.ts`, committed with a dev value | Before any deploy that isn't local |

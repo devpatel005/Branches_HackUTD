@@ -76,6 +76,38 @@ export function useImpact(eventId: bigint | undefined) {
   return { impact, computedAt: row?.computedAt };
 }
 
+/**
+ * The job the agent is working on right now, if any.
+ *
+ * `progressText` is written by the agent service as it goes, so both partners
+ * see "Thinking…" at the same moment (04 Architecture#Message bus pattern).
+ */
+export function useAgentActivity() {
+  const { me } = useMe();
+  const [jobs, ready] = useTable(tables.agentJob);
+  const mine = me ? jobs.filter(j => j.householdId === me.householdId) : [];
+  const running = mine.find(j => j.status === 'running');
+  const queued = mine.filter(j => j.status === 'queued').length;
+  const lastFailed = mine
+    .filter(j => j.status === 'failed')
+    .sort((a, b) => (a.id < b.id ? 1 : -1))[0];
+  return {
+    ready,
+    running,
+    queued,
+    progressText: running?.progressText ?? '',
+    /** Whether an agent is registered at all — drives the fallback copy. */
+    lastFailed,
+  };
+}
+
+/** True when an agent member exists for this household. */
+export function useHasAgent() {
+  const [members] = useTable(tables.member);
+  const { me } = useMe();
+  return me ? members.some(m => m.householdId === me.householdId && m.role === 'agent') : false;
+}
+
 /** The shared thread, oldest first. */
 export function useThread() {
   const { me } = useMe();

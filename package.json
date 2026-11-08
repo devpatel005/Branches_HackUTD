@@ -26,12 +26,15 @@
     "verify": "npm run -w @branches/verify verify",
     "verify:math": "npm run -w @branches/verify verify:math",
     "verify:selftest": "npm run -w @branches/verify verify:selftest",
-    "typecheck": "npm run -w @branches/engine typecheck && npm run -w @branches/spacetime typecheck && npm run -w @branches/mobile typecheck",
+    "typecheck": "npm run -w @branches/engine typecheck && npm run -w @branches/spacetime typecheck && npm run -w @branches/mobile typecheck && npm run -w @branches/agent typecheck && npm run -w @branches/verify typecheck",
     "postinstall": "node scripts/link-module-tsc.mjs",
     "verify:stdb": "npm run -w @branches/verify verify:stdb",
     "verify:engine": "npm run -w @branches/verify verify:engine",
     "verify:purity": "npm run -w @branches/verify verify:purity",
     "verify:inference": "npm run -w @branches/verify verify:inference",
-    "verify:flow": "npm run -w @branches/verify verify:flow"
+    "verify:flow": "npm run -w @branches/verify verify:flow",
+    "agent:mock": "npm run -w @branches/agent mock",
+    "verify:agent": "npm run -w @branches/verify verify:agent",
+    "verify:agent:e2e": "npm run -w @branches/verify verify:agent:e2e"
   }
 }

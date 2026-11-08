@@ -78,9 +78,11 @@ function subscribe(client: Client): Promise<void> {
         clearTimeout(timer);
         resolve();
       })
-      .onError((_ctx, error) => {
+      // The subscription builder's onError takes one argument; the error
+      // arrives on the context, not as a second parameter.
+      .onError(ctx => {
         clearTimeout(timer);
-        reject(error);
+        reject(ctx.event ?? new Error('subscription failed'));
       })
       .subscribe(SUBSCRIPTIONS);
   });
@@ -181,12 +183,14 @@ checks.push(
 
 await b.conn.reducers.joinHousehold({ joinCode: household.joinCode, displayName: 'Jordan' });
 await waitFor('both members on A', () =>
-  rows.members(a).filter(m => m.householdId === household.id).length === 2 ? true : undefined
+  rows.members(a).filter(m => m.householdId === household.id && m.role === 'member').length === 2
+    ? true
+    : undefined
 );
 
 const householdMembers = rows
   .members(a)
-  .filter(m => m.householdId === household.id)
+  .filter(m => m.householdId === household.id && m.role === 'member')
   .sort((x, y) => (x.id < y.id ? -1 : 1));
 const memberA = householdMembers[0]!;
 const memberB = householdMembers[1]!;
@@ -203,7 +207,7 @@ checks.push(
 // 2. Seed and infer
 // ======================================================================
 await a.conn.reducers.seedMockData({ profileId: 'test-household-a' });
-await a.conn.reducers.runInference();
+await a.conn.reducers.runInference({});
 
 await waitFor('A to receive inferred items', () =>
   rows.items(a).length > 0 ? true : undefined
@@ -277,8 +281,8 @@ checks.push(
 // ======================================================================
 // 5. Confirm, answer, set fun money
 // ======================================================================
-await a.conn.reducers.confirmAllMyItems();
-await b.conn.reducers.confirmAllMyItems();
+await a.conn.reducers.confirmAllMyItems({});
+await b.conn.reducers.confirmAllMyItems({});
 await waitFor('A items confirmed', () =>
   rows.items(a).every(i => i.status === 'confirmed') ? true : undefined
 );
@@ -1021,19 +1025,22 @@ async function onePinPerMember(
 // ======================================================================
 // 11. Reseed keeps the pairing
 // ======================================================================
-await a.conn.reducers.finishOnboarding();
+await a.conn.reducers.finishOnboarding({});
 await waitFor('onboarded', () =>
   [...a.conn.db.household.iter()].find(h => h.id === household.id)?.onboarded ? true : undefined
 );
 
-await a.conn.reducers.reseedHousehold();
+await a.conn.reducers.reseedHousehold({});
 await waitFor('reseed clears items', () => (rows.items(a).length === 0 ? true : undefined));
 
 checks.push(
   check('R1', 'reseed clears inferred items', rows.items(a).length, 0),
   check('R2', 'reseed clears gap questions', rows.gaps(a).length, 0),
   check('R3', 'reseed clears fun money', rows.funMoney(a).filter(f => f.householdId === household.id).length, 0),
-  check('R4', 'reseed keeps both members paired', rows.members(a).filter(m => m.householdId === household.id).length, 2),
+  // Role-filtered: an agent service, if one is running, registers as a member
+  // of this household too. Counting every row would make this fail whenever the
+  // agent happens to be up.
+  check('R4', 'reseed keeps both partners paired', rows.members(a).filter(m => m.householdId === household.id && m.role === 'member').length, 2),
   check('R5', 'reseed keeps the join code', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.joinCode, household.joinCode),
   check('R6', 'reseed keeps the transactions, so inference can re-run', rows.transactions(a).length > 0, true),
   check('R7', 'reseed returns the household to un-onboarded', [...a.conn.db.household.iter()].find(h => h.id === household.id)?.onboarded, false),
