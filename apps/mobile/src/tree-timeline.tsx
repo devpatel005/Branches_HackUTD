@@ -10,7 +10,7 @@ import {
   type NativeSyntheticEvent,
   type ScrollViewInstance,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import Svg, { G, Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from './components';
 import { FernLeafPaths } from './forest';
@@ -180,12 +180,37 @@ function TreeOverview({
 }
 
 /**
- * The whole plan as one spruce, in the same notched-tier style as the forest
- * in the background: a thin bark trunk, one tier of boughs per plan year
- * (widest at Year 1, narrowing to the leader at Year 10), and roots at the
- * base. Tight years are moss-coloured tiers. Each year's label sits in the
- * gutter on the left and the whole band is tappable.
+ * The whole plan as one tree: a bark trunk flaring into line-work roots, a
+ * side branch with a leaf clump every two years, and a round crown over the
+ * last years. Same shape as a classic game tree, drawn in the app's own style:
+ * flat layered night greens with a faint seafoam edge, flat brown bark, no
+ * outlines, no gradients. Fixed seed, so it is identical on every render.
  */
+
+/** A soft, lumpy clump of leaves: points round an ellipse, smoothed with curves. */
+function clumpPath(cx: number, cy: number, rx: number, ry: number, seed: number, lumps = 11) {
+  const r = seeded(seed);
+  const pts: [number, number][] = [];
+  for (let i = 0; i < lumps; i++) {
+    const a = (i / lumps) * Math.PI * 2;
+    const k = 0.88 + r() * 0.18;
+    pts.push([cx + Math.cos(a) * rx * k, cy + Math.sin(a) * ry * k]);
+  }
+  const mid = (a: [number, number], b: [number, number]) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  let d = '';
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]!;
+    const b = pts[(i + 1) % pts.length]!;
+    const m = mid(a, b);
+    // Push each control point outward a little so the edge reads as lumps of leaves.
+    const ox = a[0] + (a[0] - cx) * 0.12;
+    const oy = a[1] + (a[1] - cy) * 0.12;
+    d += i === 0 ? `M${f(mid(pts[pts.length - 1]!, a)[0])},${f(mid(pts[pts.length - 1]!, a)[1])}` : '';
+    d += ` Q${f(ox)},${f(oy)} ${f(m[0])},${f(m[1])}`;
+  }
+  return d + ' Z';
+}
+
 function Spruce({
   width: W,
   height: H,
@@ -199,69 +224,78 @@ function Spruce({
   yearLabel: (year: number) => string;
   onClimb: (year: number) => void;
 }) {
-  const TOP = 34;
-  const BASE = 46;
+  const TOP = 20;
+  const BASE = 40;
   const GUTTER = 112;
   const rowH = (H - TOP - BASE) / PLAN_YEARS;
-  const cx = Math.max(GUTTER + 60, W * 0.6);
-  const maxHalf = Math.max(40, Math.min(W - cx - 10, cx - GUTTER - 6));
-  const minHalf = maxHalf * 0.3;
   const rowTop = (year: number) => TOP + (PLAN_YEARS - year) * rowH;
-  const half = (year: number) => minHalf + (maxHalf - minHalf) * ((PLAN_YEARS - year) / (PLAN_YEARS - 1));
-  const trunkBottom = H - BASE;
-  const trunkTopW = 6;
-  const trunkBotW = 18;
+  const cx = Math.max(GUTTER + 70, W * 0.62);
+  const room = Math.min(W - cx - 8, cx - GUTTER - 8);
 
-  const tier = (year: number) => {
-    const top = rowTop(year);
-    const apex = year === PLAN_YEARS ? TOP - 6 : top + rowH * 0.18;
-    const hem = top + rowH * 1.1;
-    const h = half(year);
-    const drop = hem - apex;
-    // Notched sides like the background spruces, and a ragged hem.
-    let d = `M${f(cx)},${f(apex)}`;
-    d += ` L${f(cx + h * 0.42)},${f(apex + drop * 0.55)} L${f(cx + h * 0.3)},${f(apex + drop * 0.52)}`;
-    d += ` L${f(cx + h)},${f(hem)}`;
-    const teeth = 5;
-    for (let k = 1; k <= teeth; k++) {
-      const x = cx + h - (2 * h * k) / teeth;
-      d += ` L${f(x + h / teeth)},${f(hem - 2.5)} L${f(x)},${f(hem)}`;
-    }
-    d += ` L${f(cx - h * 0.3)},${f(apex + drop * 0.52)} L${f(cx - h * 0.42)},${f(apex + drop * 0.55)} Z`;
-    return d;
+  const crown = {
+    x: cx,
+    y: rowTop(PLAN_YEARS) + rowH * 1.0,
+    rx: Math.max(44, Math.min(room, W * 0.24)),
+    ry: Math.max(40, rowH * 1.9),
+  };
+  const trunkTop = crown.y;
+  const trunkBottom = H - BASE;
+  const tTop = 7;
+  const tBot = 12;
+  const trunk = `M${f(cx - tTop)},${f(trunkTop)} L${f(cx + tTop)},${f(trunkTop)} L${f(cx + tBot)},${f(trunkBottom)} L${f(cx - tBot)},${f(trunkBottom)} Z`;
+  const trunkLit = `M${f(cx - tTop)},${f(trunkTop)} L${f(cx - tTop + 4)},${f(trunkTop)} L${f(cx - tBot + 5)},${f(trunkBottom)} L${f(cx - tBot)},${f(trunkBottom)} Z`;
+
+  // Branches every two years, alternating sides, rising to a clump.
+  const branches = [2, 4, 6, 8].map((year, i) => {
+    const dir = i % 2 === 0 ? 1 : -1;
+    const y0 = rowTop(year) + rowH * 0.85;
+    const len = Math.min(48, room - 26);
+    const x1 = cx + dir * (tTop + len);
+    const y1 = y0 - rowH * 0.55;
+    return {
+      year,
+      stem: `M${f(cx + dir * tTop * 0.6)},${f(y0)} Q${f(cx + dir * (tTop + len * 0.6))},${f(y0)} ${f(x1)},${f(y1)}`,
+      clump: { x: x1 + dir * 4, y: y1 - 6, rx: Math.min(22, room - len + 6), ry: 15 },
+    };
+  });
+
+  const leaderEnd = (year: number) => {
+    const y = rowTop(year) + rowH / 2;
+    const k = (y - crown.y) / crown.ry;
+    const trunkLeft = cx - tBot - 6;
+    if (Math.abs(k) < 1) return Math.min(trunkLeft, crown.x - crown.rx * Math.sqrt(1 - k * k)) - 6;
+    return trunkLeft;
   };
 
-  const trunk = `M${f(cx - trunkTopW / 2)},${f(TOP)} L${f(cx + trunkTopW / 2)},${f(TOP)} L${f(cx + trunkBotW / 2)},${f(trunkBottom)} L${f(cx - trunkBotW / 2)},${f(trunkBottom)} Z`;
+  const leafLayers = (x: number, y: number, rx: number, ry: number, seed: number) => (
+    <>
+      <Path d={clumpPath(x, y, rx, ry, seed)} fill={BARK.foliage} />
+      {/* a lighter layer up and to the left: depth from flat layers, not a gradient */}
+      <Path d={clumpPath(x - rx * 0.14, y - ry * 0.16, rx * 0.74, ry * 0.68, seed + 1, 9)} fill={BARK.foliageLight} />
+      <Path d={clumpPath(x, y, rx, ry, seed)} stroke={colors.accent} strokeOpacity={0.35} strokeWidth={line.hair} fill="none" />
+    </>
+  );
 
   return (
     <View style={{ width: W, height: H, alignSelf: 'center' }}>
       <Svg width={W} height={H} style={StyleSheet.absoluteFill}>
-        <Path d={trunk} fill={BARK.mid} />
-        {/* Lowest tier first, so each higher tier overlaps the one below, as on a real spruce. */}
-        {Array.from({ length: PLAN_YEARS }, (_, i) => i + 1).map(year => (
-          <Path
-            key={year}
-            d={tier(year)}
-            fill={year % 2 === 0 ? BARK.foliage : BARK.foliageLight}
-            // Tight years are edged in lichen, the colour that means "tight"
-            // everywhere else in the app; the rest get a faint seafoam line.
-            stroke={tight.has(year) ? colors.warn : colors.accent}
-            strokeOpacity={tight.has(year) ? 0.9 : 0.35}
-            strokeWidth={line.hair}
-            strokeLinejoin="round"
-          />
+        {branches.map(b => (
+          <Path key={`s${b.year}`} d={b.stem} stroke={BARK.mid} strokeWidth={5} strokeLinecap="round" fill="none" />
         ))}
-        {/* the leader */}
-        <Path d={`M${f(cx)},${f(TOP - 22)} L${f(cx)},${f(TOP - 4)}`} stroke={colors.accent} strokeWidth={line.path} strokeLinecap="round" opacity={0.7} />
+        <Path d={trunk} fill={BARK.mid} />
+        <Path d={trunkLit} fill={BARK.light} />
+        {branches.map(b => (
+          <G key={`c${b.year}`}>{leafLayers(b.clump.x, b.clump.y, b.clump.rx, b.clump.ry, 40 + b.year)}</G>
+        ))}
+        {leafLayers(crown.x, crown.y, crown.rx, crown.ry, 7)}
       </Svg>
 
       <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }} pointerEvents="none">
-        <Base width={W} trunk={trunkBotW} height={BASE} center={cx} />
+        <Base width={W} trunk={tBot * 2} height={BASE} center={cx} />
       </View>
 
       {Array.from({ length: PLAN_YEARS }, (_, i) => PLAN_YEARS - i).map(year => {
         const isTight = tight.has(year);
-        const mid = rowH / 2;
         return (
           <Pressable
             key={year}
@@ -280,12 +314,12 @@ function Spruce({
                 {isTight ? `Year ${year} · tight` : `Year ${year}`}
               </Text>
             </View>
-            {/* A hairline from the label to the tier it names. */}
             <View
               pointerEvents="none"
               style={[
                 styles.spruceLeader,
-                { top: mid, left: GUTTER - 10, width: Math.max(0, cx - half(year) - GUTTER + 4) },
+                { top: rowH / 2, left: GUTTER - 10, width: Math.max(0, leaderEnd(year) - GUTTER + 10) },
+                isTight && { backgroundColor: colors.warn },
               ]}
             />
           </Pressable>
@@ -677,12 +711,13 @@ function Canopy({ width, height, overlap }: { width: number; height: number; ove
     }
     return d + ' Z';
   };
-  const front = band(H * 0.55, H * 0.32, 9, 3);
+  // Few, short points: a hint of boughs, not a row of spikes.
+  const front = band(H * 0.62, H * 0.12, 5, 3);
   return (
     <View style={[styles.canopy, { height: H, marginBottom: -(overlap ?? Math.round(H * 0.4)) }]} pointerEvents="none" aria-hidden>
       <Svg width={width} height={H + 10}>
-        <Path d={band(H * 0.25, H * 0.3, 7, 1)} fill={colors.treeFar} />
-        <Path d={band(H * 0.4, H * 0.3, 8, 2)} fill={BARK.foliageLight} />
+        <Path d={band(H * 0.4, H * 0.1, 4, 1)} fill={colors.treeFar} />
+        <Path d={band(H * 0.52, H * 0.11, 4, 2)} fill={BARK.foliageLight} />
         <Path d={front} fill={BARK.foliage} />
         <Path d={front} stroke={colors.accent} strokeOpacity={0.35} strokeWidth={line.hair} fill="none" strokeLinejoin="round" />
       </Svg>
