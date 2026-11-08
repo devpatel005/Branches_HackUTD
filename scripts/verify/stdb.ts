@@ -16,6 +16,7 @@
  *   npm run verify:stdb
  */
 import { DbConnection, tables, reducers } from '@branches/bindings';
+import { ENGINE_VERSION, f1SavingsNoInterest } from '@branches/engine';
 import type { Identity } from 'spacetimedb';
 import { check, printTable, type Check } from './table.ts';
 
@@ -100,8 +101,10 @@ if (!before) throw new Error('counter row missing — republish the module');
 checks.push(
   check('D1', 'client A connected and received an identity', typeof a.identity.toHexString(), 'string'),
   check('D2', 'client B connected with a different identity', a.identity.toHexString() === b.identity.toHexString(), false),
-  check('D3', 'engine ran inside the reducer: F1(12,000, 24)', before.engineCheck, 500),
-  check('D4', 'engine version written by the module', before.engineVersion, '0.0.0-stage0')
+  check('D3', 'engine ran inside the reducer: F1(12,000, 24)', before.engineCheck, f1SavingsNoInterest(12000, 24)),
+  // Compared against the local engine, not a literal: a mismatch means the
+  // published module is stale and needs `npm run stdb:publish:local`.
+  check('D4', 'published module matches the local engine version', before.engineVersion, ENGINE_VERSION)
 );
 
 // A calls the reducer; B must observe it through its own subscription.

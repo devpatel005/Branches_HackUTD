@@ -21,10 +21,11 @@ type Suite = {
 };
 
 const SUITES: Suite[] = [
-  { name: 'V1 Math', script: 'math.ts', stage: 'Stage 0/1' },
+  { name: 'V1 Math', script: 'math.ts', stage: 'Stage 1' },
+  { name: 'V2 Engine', script: 'engine.ts', stage: 'Stage 1' },
+  { name: 'Engine purity', script: 'purity.ts', stage: 'Stage 1' },
   { name: 'Harness selftest', script: 'selftest.ts', expectFailure: true, stage: 'Stage 0' },
   { name: 'Stage 0 data path', script: 'stdb.ts', requiresServer: true, stage: 'Stage 0' },
-  // Stage 1: { name: 'V2 Engine', script: 'engine.ts', stage: 'Stage 1' },
   // Stage 2: { name: 'V3 Inference', script: 'inference.ts', stage: 'Stage 2' },
   // Stage 3: { name: 'V4 Data flow', script: 'flow.ts', stage: 'Stage 3' },
   // Stage 6: { name: 'V5 Agent contract', script: 'agent.ts', stage: 'Stage 6' },

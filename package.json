@@ -28,6 +28,8 @@
     "verify:selftest": "npm run -w @branches/verify verify:selftest",
     "typecheck": "npm run -w @branches/engine typecheck && npm run -w @branches/spacetime typecheck && npm run -w @branches/mobile typecheck",
     "postinstall": "node scripts/link-module-tsc.mjs",
-    "verify:stdb": "npm run -w @branches/verify verify:stdb"
+    "verify:stdb": "npm run -w @branches/verify verify:stdb",
+    "verify:engine": "npm run -w @branches/verify verify:engine",
+    "verify:purity": "npm run -w @branches/verify verify:purity"
   }
 }

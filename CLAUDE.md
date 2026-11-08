@@ -110,7 +110,9 @@ npm run agent                              # the service (Stage 6)
 ### Verification ([[12 Verification]])
 ```bash
 npm run verify              # every suite, aggregated; non-zero on any failure
-npm run verify:math         # V1 Math
+npm run verify:math         # V1 Math — F1-F5, r = 0 cases, money rounding
+npm run verify:engine       # V2 Engine — golden scenarios E1-E5, E10, provenance
+npm run verify:purity       # engine uses no time, randomness or I/O
 npm run verify:stdb         # Stage 0 data path (needs a published module)
 npm run verify:selftest     # proves the harness reports failures (exits 1 by design)
 npm run typecheck           # engine + module + app

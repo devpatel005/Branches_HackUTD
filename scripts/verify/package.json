@@ -8,7 +8,9 @@
     "verify": "node --disable-warning=ExperimentalWarning run-all.ts",
     "verify:math": "node --disable-warning=ExperimentalWarning math.ts",
     "verify:selftest": "node --disable-warning=ExperimentalWarning selftest.ts",
-    "verify:stdb": "node --disable-warning=ExperimentalWarning stdb.ts"
+    "verify:stdb": "node --disable-warning=ExperimentalWarning stdb.ts",
+    "verify:engine": "node --disable-warning=ExperimentalWarning engine.ts",
+    "verify:purity": "node --disable-warning=ExperimentalWarning purity.ts"
   },
   "dependencies": {
     "@branches/engine": "*",

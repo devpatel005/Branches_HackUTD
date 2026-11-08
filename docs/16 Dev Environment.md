@@ -67,6 +67,29 @@ The version number is in the path, so this needs redoing after a CLI upgrade.
 Reverse with `--blockapp`. The LAN IP changes between networks — re-check with
 `ipconfig getifaddr en0`.
 
+## Gotcha: logging in after creating a local database
+`spacetime login` changes the CLI's **active identity**. A local database created
+*before* logging in is owned by the earlier server-local identity, and the newly
+logged-in identity cannot update or even delete it:
+
+```
+Error: Pre-publish check failed with status 403 Forbidden:
+  <identity> is not authorized to perform action on database <db>: update database
+```
+
+Fix, for a local database holding nothing but dev state:
+```bash
+spacetime server clear --yes     # deletes the data dir on disk
+pkill -f spacetimedb-standalone  # a running server keeps its state in memory
+spacetime start                  # restart, then republish
+npm run stdb:publish:local
+```
+The restart is not optional — without it the old database is still served from
+memory and the publish fails again. **Check what the database holds first.**
+
+Hit during [[Stage 1 - Engine Core]]. Avoid it by logging in *before* creating
+any local database.
+
 ## Toolchain as of Stage 0
 | Thing | Version | Note |
 |---|---|---|
