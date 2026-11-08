@@ -10,11 +10,27 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export const ConnectedClient = __t.object("ConnectedClient", {
-  identity: __t.identity(),
-  connectedAt: __t.timestamp(),
+export const Assumption = __t.object("Assumption", {
+  householdId: __t.u64(),
+  savingsRateBps: __t.i32(),
+  inflationBps: __t.i32(),
+  mortgageRateBps: __t.i32(),
+  carRateBps: __t.i32(),
 });
-export type ConnectedClient = __Infer<typeof ConnectedClient>;
+export type Assumption = __Infer<typeof Assumption>;
+
+export const Baseline = __t.object("Baseline", {
+  householdId: __t.u64(),
+  get incomeByMember() {
+    return __t.array(MemberIncome);
+  },
+  fixedCents: __t.i32(),
+  debtCents: __t.i32(),
+  flexibleCents: __t.i32(),
+  retirementCents: __t.i32(),
+  liquidSavingsCents: __t.i32(),
+});
+export type Baseline = __Infer<typeof Baseline>;
 
 export const Counter = __t.object("Counter", {
   id: __t.u32(),
@@ -24,4 +40,97 @@ export const Counter = __t.object("Counter", {
   lastBumpedBy: __t.option(__t.identity()),
 });
 export type Counter = __Infer<typeof Counter>;
+
+export const FunMoney = __t.object("FunMoney", {
+  memberId: __t.u64(),
+  householdId: __t.u64(),
+  monthlyCents: __t.i32(),
+  status: __t.string(),
+  carryoverCents: __t.i32(),
+});
+export type FunMoney = __Infer<typeof FunMoney>;
+
+export const GapQuestion = __t.object("GapQuestion", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  ownerMemberId: __t.u64(),
+  ownerIdentity: __t.identity(),
+  engineKey: __t.string(),
+  prompt: __t.string(),
+  answerType: __t.string(),
+  options: __t.array(__t.string()),
+  answer: __t.option(__t.string()),
+  subject: __t.string(),
+});
+export type GapQuestion = __Infer<typeof GapQuestion>;
+
+export const Household = __t.object("Household", {
+  id: __t.u64(),
+  joinCode: __t.string(),
+  name: __t.string(),
+  currentMonth: __t.string(),
+  createdAt: __t.timestamp(),
+  onboarded: __t.bool(),
+});
+export type Household = __Infer<typeof Household>;
+
+export const InferredItem = __t.object("InferredItem", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  ownerMemberId: __t.u64(),
+  ownerIdentity: __t.identity(),
+  kind: __t.string(),
+  label: __t.string(),
+  monthlyCents: __t.i32(),
+  status: __t.string(),
+  sortIndex: __t.i32(),
+});
+export type InferredItem = __Infer<typeof InferredItem>;
+
+export const Member = __t.object("Member", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  identity: __t.identity(),
+  displayName: __t.string(),
+  colorKey: __t.string(),
+  role: __t.string(),
+  online: __t.bool(),
+  lastSeenAt: __t.timestamp(),
+});
+export type Member = __Infer<typeof Member>;
+
+export const MemberIncome = __t.object("MemberIncome", {
+  memberId: __t.u64(),
+  cents: __t.i32(),
+});
+export type MemberIncome = __Infer<typeof MemberIncome>;
+
+export const MemberProgress = __t.object("MemberProgress", {
+  memberId: __t.u64(),
+  householdId: __t.u64(),
+  displayName: __t.string(),
+  colorKey: __t.string(),
+  itemsConfirmed: __t.u32(),
+  itemsTotal: __t.u32(),
+  gapsAnswered: __t.u32(),
+  gapsTotal: __t.u32(),
+  funMoneySet: __t.bool(),
+  online: __t.bool(),
+});
+export type MemberProgress = __Infer<typeof MemberProgress>;
+
+export const OnboardingProgress = __t.object("OnboardingProgress", {});
+export type OnboardingProgress = __Infer<typeof OnboardingProgress>;
+
+export const Transaction = __t.object("Transaction", {
+  id: __t.u64(),
+  householdId: __t.u64(),
+  ownerMemberId: __t.u64(),
+  ownerIdentity: __t.identity(),
+  date: __t.string(),
+  amountCents: __t.i32(),
+  counterparty: __t.string(),
+  counterpartyType: __t.string(),
+});
+export type Transaction = __Infer<typeof Transaction>;
 

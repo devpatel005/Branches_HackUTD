@@ -32,6 +32,21 @@ export {
   type TemplateSpec,
 } from './events.ts';
 
+export {
+  inferBaseline,
+  isRecurring,
+  followUpForGapAnswer,
+  baselineFromItems,
+  gapQuestionId,
+  INFERENCE_WINDOW_MONTHS,
+  RECURRING_MIN_OCCURRENCES,
+  RECURRING_MIN_DISTINCT_MONTHS,
+  RECURRING_AMOUNT_TOLERANCE,
+  FLEXIBLE_LABEL,
+  BROKERAGE_CHOICES,
+  BALANCE_RANGES,
+} from './inference.ts';
+
 export { simulate } from './simulate.ts';
 export { computeImpact, type ImpactOutput } from './impact.ts';
 export { checkAffordability, type AffordabilityOutput } from './affordability.ts';
@@ -75,7 +90,14 @@ export {
   type LifeEventTemplateId,
   type MemberId,
   type MonthSample,
+  type CounterpartyType,
+  type GapAnswerType,
+  type GapQuestion,
+  type InferenceOutput,
+  type InferredItem,
+  type InferredKind,
   type Priority,
+  type Transaction,
   type Provenance,
   type ProvenanceRecord,
   type SimulationInput,

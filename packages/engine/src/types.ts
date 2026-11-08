@@ -166,3 +166,78 @@ export type SimulationInput = {
   events?: readonly LifeEvent[];
   levers?: Levers;
 };
+
+// ---------------------------------------------------------------------------
+// Baseline inference (06 Engine Spec#Baseline inference)
+// ---------------------------------------------------------------------------
+
+/** Counterparty taxonomy from 11 Mock Data. Drives the inferred `kind`. */
+export type CounterpartyType =
+  | 'employer'
+  | 'landlord'
+  | 'utility'
+  | 'insurer'
+  | 'telecom'
+  | 'subscription'
+  | 'lender'
+  | 'brokerage'
+  | 'merchant';
+
+/**
+ * A mock PNC-style transaction. Dollars, positive in / negative out.
+ *
+ * **Never contains a fun-money purchase** (02 Ground Rules #3). Those live only
+ * in device-local storage and never reach the database or the agent.
+ */
+export type Transaction = {
+  id: string;
+  ownerMemberId: MemberId;
+  /** ISO `YYYY-MM-DD`. Compared as a string; never parsed into a Date here. */
+  date: string;
+  amount: number;
+  counterparty: string;
+  counterpartyType: CounterpartyType;
+};
+
+export type InferredKind =
+  | 'income'
+  | 'fixed'
+  | 'debt'
+  | 'retirement'
+  | 'external_account'
+  | 'flexible';
+
+export type InferredItem = {
+  ownerMemberId: MemberId;
+  kind: InferredKind;
+  label: string;
+  /** Positive magnitude per month, rounded to cents. */
+  monthly: number;
+  /** How many transactions backed this item, for "show the math". */
+  occurrences: number;
+  /** True when the group passed the recurring test. */
+  recurring: boolean;
+};
+
+export type GapAnswerType = 'range' | 'choice' | 'number';
+
+/** A question inference could not answer from the data (05 Data Model). */
+export type GapQuestion = {
+  /** Stable, derived from owner + subject so re-running inference is idempotent. */
+  id: string;
+  ownerMemberId: MemberId;
+  prompt: string;
+  answerType: GapAnswerType;
+  options: string[];
+  /** The inferred item label this question qualifies, when it has one. */
+  subject: string;
+};
+
+export type InferenceOutput = {
+  /** Sorted by owner, then kind, then label. */
+  items: InferredItem[];
+  /** Sorted by owner, then subject. */
+  gapQuestions: GapQuestion[];
+  /** Counterparty groups that passed the recurring test, for verification. */
+  recurringGroups: string[];
+};

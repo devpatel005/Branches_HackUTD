@@ -34,30 +34,63 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AnswerGapReducer from "./answer_gap_reducer.ts";
+import ConfirmAllMyItemsReducer from "./confirm_all_my_items_reducer.ts";
+import ConfirmItemReducer from "./confirm_item_reducer.ts";
+import CreateHouseholdReducer from "./create_household_reducer.ts";
+import EditItemReducer from "./edit_item_reducer.ts";
+import FinishOnboardingReducer from "./finish_onboarding_reducer.ts";
 import IncrementReducer from "./increment_reducer.ts";
+import JoinHouseholdReducer from "./join_household_reducer.ts";
+import RejectItemReducer from "./reject_item_reducer.ts";
+import ReseedHouseholdReducer from "./reseed_household_reducer.ts";
 import ResetReducer from "./reset_reducer.ts";
+import RunInferenceReducer from "./run_inference_reducer.ts";
+import SeedMockDataReducer from "./seed_mock_data_reducer.ts";
+import SetDisplayNameReducer from "./set_display_name_reducer.ts";
+import SetFunMoneyReducer from "./set_fun_money_reducer.ts";
+import SetFunMoneyStatusReducer from "./set_fun_money_status_reducer.ts";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
-import ConnectedClientRow from "./connected_client_table.ts";
+import AssumptionRow from "./assumption_table.ts";
+import BaselineRow from "./baseline_table.ts";
 import CounterRow from "./counter_table.ts";
+import FunMoneyRow from "./fun_money_table.ts";
+import GapQuestionRow from "./gap_question_table.ts";
+import HouseholdRow from "./household_table.ts";
+import InferredItemRow from "./inferred_item_table.ts";
+import MemberRow from "./member_table.ts";
+import OnboardingProgressRow from "./onboarding_progress_table.ts";
+import TransactionRow from "./transaction_table.ts";
 
 /** Type-only namespace exports for generated type groups. */
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
-  connectedClient: __table({
-    name: 'connected_client',
+  assumption: __table({
+    name: 'assumption',
     indexes: [
-      { accessor: 'identity', name: 'connected_client_identity_idx_btree', algorithm: 'btree', columns: [
-        'identity',
+      { accessor: 'householdId', name: 'assumption_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
       ] },
     ],
     constraints: [
-      { name: 'connected_client_identity_key', constraint: 'unique', columns: ['identity'] },
+      { name: 'assumption_household_id_key', constraint: 'unique', columns: ['householdId'] },
     ],
-  }, ConnectedClientRow),
+  }, AssumptionRow),
+  baseline: __table({
+    name: 'baseline',
+    indexes: [
+      { accessor: 'householdId', name: 'baseline_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+    ],
+    constraints: [
+      { name: 'baseline_household_id_key', constraint: 'unique', columns: ['householdId'] },
+    ],
+  }, BaselineRow),
   counter: __table({
     name: 'counter',
     indexes: [
@@ -69,12 +102,131 @@ const tablesSchema = __schema({
       { name: 'counter_id_key', constraint: 'unique', columns: ['id'] },
     ],
   }, CounterRow),
+  funMoney: __table({
+    name: 'fun_money',
+    indexes: [
+      { accessor: 'householdId', name: 'fun_money_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'memberId', name: 'fun_money_member_id_idx_btree', algorithm: 'btree', columns: [
+        'memberId',
+      ] },
+    ],
+    constraints: [
+      { name: 'fun_money_member_id_key', constraint: 'unique', columns: ['memberId'] },
+    ],
+  }, FunMoneyRow),
+  gapQuestion: __table({
+    name: 'gap_question',
+    indexes: [
+      { accessor: 'householdId', name: 'gap_question_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'gap_question_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'ownerIdentity', name: 'gap_question_owner_identity_idx_btree', algorithm: 'btree', columns: [
+        'ownerIdentity',
+      ] },
+    ],
+    constraints: [
+      { name: 'gap_question_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, GapQuestionRow),
+  household: __table({
+    name: 'household',
+    indexes: [
+      { accessor: 'id', name: 'household_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'joinCode', name: 'household_join_code_idx_btree', algorithm: 'btree', columns: [
+        'joinCode',
+      ] },
+    ],
+    constraints: [
+      { name: 'household_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'household_join_code_key', constraint: 'unique', columns: ['joinCode'] },
+    ],
+  }, HouseholdRow),
+  inferredItem: __table({
+    name: 'inferred_item',
+    indexes: [
+      { accessor: 'householdId', name: 'inferred_item_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'inferred_item_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'ownerIdentity', name: 'inferred_item_owner_identity_idx_btree', algorithm: 'btree', columns: [
+        'ownerIdentity',
+      ] },
+    ],
+    constraints: [
+      { name: 'inferred_item_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, InferredItemRow),
+  member: __table({
+    name: 'member',
+    indexes: [
+      { accessor: 'householdId', name: 'member_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'member_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'identity', name: 'member_identity_idx_btree', algorithm: 'btree', columns: [
+        'identity',
+      ] },
+    ],
+    constraints: [
+      { name: 'member_id_key', constraint: 'unique', columns: ['id'] },
+      { name: 'member_identity_key', constraint: 'unique', columns: ['identity'] },
+    ],
+  }, MemberRow),
+  transaction: __table({
+    name: 'transaction',
+    indexes: [
+      { accessor: 'householdId', name: 'transaction_household_id_idx_btree', algorithm: 'btree', columns: [
+        'householdId',
+      ] },
+      { accessor: 'id', name: 'transaction_id_idx_btree', algorithm: 'btree', columns: [
+        'id',
+      ] },
+      { accessor: 'ownerIdentity', name: 'transaction_owner_identity_idx_btree', algorithm: 'btree', columns: [
+        'ownerIdentity',
+      ] },
+    ],
+    constraints: [
+      { name: 'transaction_id_key', constraint: 'unique', columns: ['id'] },
+    ],
+  }, TransactionRow),
+  onboardingProgress: __table({
+    name: 'onboarding_progress',
+    indexes: [
+    ],
+    constraints: [
+    ],
+  }, OnboardingProgressRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("answer_gap", AnswerGapReducer),
+  __reducerSchema("confirm_all_my_items", ConfirmAllMyItemsReducer),
+  __reducerSchema("confirm_item", ConfirmItemReducer),
+  __reducerSchema("create_household", CreateHouseholdReducer),
+  __reducerSchema("edit_item", EditItemReducer),
+  __reducerSchema("finish_onboarding", FinishOnboardingReducer),
   __reducerSchema("increment", IncrementReducer),
+  __reducerSchema("join_household", JoinHouseholdReducer),
+  __reducerSchema("reject_item", RejectItemReducer),
+  __reducerSchema("reseed_household", ReseedHouseholdReducer),
   __reducerSchema("reset", ResetReducer),
+  __reducerSchema("run_inference", RunInferenceReducer),
+  __reducerSchema("seed_mock_data", SeedMockDataReducer),
+  __reducerSchema("set_display_name", SetDisplayNameReducer),
+  __reducerSchema("set_fun_money", SetFunMoneyReducer),
+  __reducerSchema("set_fun_money_status", SetFunMoneyStatusReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

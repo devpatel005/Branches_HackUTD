@@ -6,9 +6,37 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AnswerGapReducer from "../answer_gap_reducer.ts";
+import ConfirmAllMyItemsReducer from "../confirm_all_my_items_reducer.ts";
+import ConfirmItemReducer from "../confirm_item_reducer.ts";
+import CreateHouseholdReducer from "../create_household_reducer.ts";
+import EditItemReducer from "../edit_item_reducer.ts";
+import FinishOnboardingReducer from "../finish_onboarding_reducer.ts";
 import IncrementReducer from "../increment_reducer.ts";
+import JoinHouseholdReducer from "../join_household_reducer.ts";
+import RejectItemReducer from "../reject_item_reducer.ts";
+import ReseedHouseholdReducer from "../reseed_household_reducer.ts";
 import ResetReducer from "../reset_reducer.ts";
+import RunInferenceReducer from "../run_inference_reducer.ts";
+import SeedMockDataReducer from "../seed_mock_data_reducer.ts";
+import SetDisplayNameReducer from "../set_display_name_reducer.ts";
+import SetFunMoneyReducer from "../set_fun_money_reducer.ts";
+import SetFunMoneyStatusReducer from "../set_fun_money_status_reducer.ts";
 
+export type AnswerGapParams = __Infer<typeof AnswerGapReducer>;
+export type ConfirmAllMyItemsParams = __Infer<typeof ConfirmAllMyItemsReducer>;
+export type ConfirmItemParams = __Infer<typeof ConfirmItemReducer>;
+export type CreateHouseholdParams = __Infer<typeof CreateHouseholdReducer>;
+export type EditItemParams = __Infer<typeof EditItemReducer>;
+export type FinishOnboardingParams = __Infer<typeof FinishOnboardingReducer>;
 export type IncrementParams = __Infer<typeof IncrementReducer>;
+export type JoinHouseholdParams = __Infer<typeof JoinHouseholdReducer>;
+export type RejectItemParams = __Infer<typeof RejectItemReducer>;
+export type ReseedHouseholdParams = __Infer<typeof ReseedHouseholdReducer>;
 export type ResetParams = __Infer<typeof ResetReducer>;
+export type RunInferenceParams = __Infer<typeof RunInferenceReducer>;
+export type SeedMockDataParams = __Infer<typeof SeedMockDataReducer>;
+export type SetDisplayNameParams = __Infer<typeof SetDisplayNameReducer>;
+export type SetFunMoneyParams = __Infer<typeof SetFunMoneyReducer>;
+export type SetFunMoneyStatusParams = __Infer<typeof SetFunMoneyStatusReducer>;
 

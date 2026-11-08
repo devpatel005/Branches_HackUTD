@@ -30,6 +30,8 @@
     "postinstall": "node scripts/link-module-tsc.mjs",
     "verify:stdb": "npm run -w @branches/verify verify:stdb",
     "verify:engine": "npm run -w @branches/verify verify:engine",
-    "verify:purity": "npm run -w @branches/verify verify:purity"
+    "verify:purity": "npm run -w @branches/verify verify:purity",
+    "verify:inference": "npm run -w @branches/verify verify:inference",
+    "verify:flow": "npm run -w @branches/verify verify:flow"
   }
 }

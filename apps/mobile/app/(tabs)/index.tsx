@@ -1,101 +1,149 @@
-import { View, Text, Pressable, StyleSheet, ScrollView } from 'react-native';
-import { useTable, useReducer } from 'spacetimedb/react';
-import { tables, reducers } from '@branches/bindings';
-import { colors, space, type, tabularNums } from '../../src/theme';
-import { useIdentity } from '../../src/spacetime';
+import { useState } from 'react';
+import { StyleSheet, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { useReducer } from 'spacetimedb/react';
+import { reducers } from '@branches/bindings';
+import {
+  Avatar,
+  Body,
+  Button,
+  Caption,
+  Hero,
+  Notice,
+  Row,
+  Screen,
+  SectionHeader,
+  Title,
+} from '../../src/components';
+import {
+  memberColor,
+  useBaseline,
+  useHousehold,
+  useHouseholdMembers,
+  useMyFunMoney,
+} from '../../src/household';
+import { dollars, perMonth } from '../../src/format';
+import { space } from '../../src/theme';
 
+/**
+ * Home — a Stage 2 placeholder.
+ *
+ * It shows the confirmed baseline so onboarding can be seen to have worked.
+ * The real Home (hero "Free to plan", the scrubbable projection chart, the stat
+ * row and the goal list) arrives in Stage 3, once goals exist and the engine
+ * runs inside `recomputeProjection` (10 Screens#Home).
+ */
 export default function HomeScreen() {
-  const [counters, countersReady] = useTable(tables.counter);
-  const [clients] = useTable(tables.connectedClient);
-  const increment = useReducer(reducers.increment);
-  const { identity, reusedToken } = useIdentity();
+  const router = useRouter();
+  const household = useHousehold();
+  const members = useHouseholdMembers();
+  const { baseline } = useBaseline();
+  const { funMoney } = useMyFunMoney();
 
-  const counter = counters[0];
+  const reseed = useReducer(reducers.reseedHousehold);
+  const [error, setError] = useState<string | null>(null);
 
-  // 14 Research Notes#SpacetimeDB: calling a reducer briefly flips isReady to
-  // false, so `if (!isReady) return <Loading/>` makes the screen flash on every
-  // tap. Only show loading when there is genuinely nothing to render yet.
-  const showLoading = !countersReady && counters.length === 0;
+  if (!household) return <Screen><Caption>Connecting…</Caption></Screen>;
+
+  const incomeTotal = (baseline?.incomeByMember ?? []).reduce((sum, m) => sum + m.cents, 0);
+  const funMoneyTotal = members.length * (funMoney?.monthlyCents ?? 0);
+
+  // Shown, not computed here: Stage 3 moves this to the engine's `freeToPlan`,
+  // which carries provenance. Until then it is labelled as a raw subtotal so
+  // nobody mistakes it for a projection (02 Ground Rules #1).
+  const surplus = baseline
+    ? incomeTotal -
+      baseline.fixedCents -
+      baseline.debtCents -
+      baseline.flexibleCents -
+      baseline.retirementCents -
+      funMoneyTotal
+    : 0;
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <Text style={styles.caption}>Stage 0 — real-time sync check</Text>
-
-      {showLoading ? (
-        <Text style={styles.loading}>Connecting…</Text>
-      ) : (
-        <>
-          <Text style={[styles.display, tabularNums]}>{counter?.value ?? 0}</Text>
-          <Text style={styles.caption}>
-            Shared counter · tap on one device, watch the other
-          </Text>
-
-          <Pressable
-            style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
-            onPress={() => void increment()}
-          >
-            <Text style={styles.buttonLabel}>Increment</Text>
-          </Pressable>
-
-          <View style={styles.rows}>
-            <Row
-              label="Engine check — F1(12,000, 24)"
-              value={counter ? counter.engineCheck.toFixed(2) : '—'}
-              hint="must be 500.00; computed by packages/engine inside the reducer"
+    <Screen>
+      <View style={styles.header}>
+        <View style={styles.avatars}>
+          {members.map(m => (
+            <Avatar
+              key={String(m.id)}
+              name={m.displayName}
+              color={memberColor(m.colorKey)}
+              online={m.online}
             />
-            <Row label="Engine version" value={counter?.engineVersion ?? '—'} />
-            <Row label="Devices connected" value={String(clients.length)} />
-            <Row
-              label="My identity"
-              value={identity ? `${identity.toHexString().slice(0, 12)}…` : '—'}
-              hint={reusedToken ? 'reused stored token' : 'new token issued'}
-            />
-          </View>
-        </>
-      )}
-    </ScrollView>
-  );
-}
-
-function Row({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <View style={styles.row}>
-      <View style={styles.rowLabel}>
-        <Text style={styles.rowLabelText}>{label}</Text>
-        {hint ? <Text style={styles.rowHint}>{hint}</Text> : null}
+          ))}
+        </View>
+        <Caption>Code {household.joinCode}</Caption>
       </View>
-      <Text style={[styles.rowValue, tabularNums]}>{value}</Text>
-    </View>
+
+      {baseline ? (
+        <>
+          <Hero value={dollars(surplus)} caption="left over each month, before goals" />
+
+          <SectionHeader>Every month</SectionHeader>
+          {(baseline.incomeByMember ?? []).map(entry => {
+            const member = members.find(m => m.id === entry.memberId);
+            return (
+              <Row
+                key={String(entry.memberId)}
+                label={`${member?.displayName ?? 'Partner'} — income`}
+                value={perMonth(entry.cents)}
+              />
+            );
+          })}
+          <Row label="Bills" value={perMonth(baseline.fixedCents)} />
+          <Row label="Loan payments" value={perMonth(baseline.debtCents)} />
+          <Row label="Everyday spending" value={perMonth(baseline.flexibleCents)} />
+          <Row label="Set aside for retirement" value={perMonth(baseline.retirementCents)} />
+          <Row
+            label="Fun money"
+            sublabel="amount shared, purchases private"
+            value={perMonth(funMoneyTotal)}
+          />
+
+          <SectionHeader>Savings</SectionHeader>
+          <Row label="Liquid savings" value={dollars(baseline.liquidSavingsCents)} />
+        </>
+      ) : (
+        <Notice>No confirmed baseline yet. Finish onboarding to see it here.</Notice>
+      )}
+
+      <SectionHeader>Next</SectionHeader>
+      <Body dim>
+        Goals, the ten-year projection and "show the math" arrive in the next stage.
+      </Body>
+
+      {error ? <Notice tone="warn">{error}</Notice> : null}
+
+      <SectionHeader>Dev</SectionHeader>
+      <Button
+        label="Reset onboarding (keeps the household)"
+        variant="secondary"
+        onPress={async () => {
+          setError(null);
+          try {
+            await reseed();
+            router.replace('/onboarding/confirm');
+          } catch (e) {
+            const text = e instanceof Error ? e.message : String(e);
+            setError(text.replace(/^.*SenderError:\s*/, ''));
+          }
+        }}
+      />
+      <Notice>
+        Clears inferred items, gap answers and fun money, then sends both devices back through
+        onboarding. The join code and both members survive, so the two devices stay paired.
+      </Notice>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: space.sidePadding, paddingTop: space.xl, gap: space.sm },
-  display: { ...type.display, color: colors.textPrimary },
-  caption: { ...type.caption, color: colors.textSecondary },
-  loading: { ...type.body, color: colors.textSecondary, paddingVertical: space.xl },
-  button: {
-    marginTop: space.lg,
-    backgroundColor: colors.accent,
-    borderRadius: 12,
-    paddingVertical: space.md,
-    alignItems: 'center',
-  },
-  buttonPressed: { opacity: 0.7 },
-  buttonLabel: { ...type.body, fontWeight: '600', color: colors.bg },
-  rows: { marginTop: space.xl },
-  row: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    minHeight: 64,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.hairline,
-    gap: space.md,
+    marginBottom: space.lg,
   },
-  rowLabel: { flex: 1 },
-  rowLabelText: { ...type.body, color: colors.textPrimary },
-  rowHint: { ...type.caption, color: colors.textSecondary, marginTop: space.xs },
-  rowValue: { ...type.body, color: colors.textSecondary },
+  avatars: { flexDirection: 'row', gap: space.sm },
 });

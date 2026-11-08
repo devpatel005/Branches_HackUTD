@@ -10,11 +10,14 @@
     "verify:selftest": "node --disable-warning=ExperimentalWarning selftest.ts",
     "verify:stdb": "node --disable-warning=ExperimentalWarning stdb.ts",
     "verify:engine": "node --disable-warning=ExperimentalWarning engine.ts",
-    "verify:purity": "node --disable-warning=ExperimentalWarning purity.ts"
+    "verify:purity": "node --disable-warning=ExperimentalWarning purity.ts",
+    "verify:inference": "node --disable-warning=ExperimentalWarning inference.ts",
+    "verify:flow": "node --disable-warning=ExperimentalWarning flow.ts"
   },
   "dependencies": {
     "@branches/engine": "*",
     "@branches/bindings": "*",
-    "spacetimedb": "2.14.*"
+    "spacetimedb": "2.14.*",
+    "@branches/mock-data": "*"
   }
 }

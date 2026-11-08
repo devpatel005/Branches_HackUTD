@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@branches/engine": "*",
-    "spacetimedb": "2.14.*"
+    "spacetimedb": "2.14.*",
+    "@branches/mock-data": "*"
   },
   "devDependencies": {
     "typescript": "~5.6.2"

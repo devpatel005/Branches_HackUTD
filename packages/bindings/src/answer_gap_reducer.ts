@@ -10,7 +10,7 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default __t.row({
-  identity: __t.identity().primaryKey(),
-  connectedAt: __t.timestamp().name("connected_at"),
-});
+export default {
+  questionId: __t.u64(),
+  answer: __t.string(),
+};
