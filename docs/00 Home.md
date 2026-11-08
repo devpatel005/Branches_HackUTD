@@ -24,7 +24,8 @@ Start here. Claude Code reads [[CLAUDE]] first, then the current stage.
 | [[14 Research Notes]] | Condensed findings from team research, with flags |
 | [[15 Money and Rounding]] | How dollars become cents, and the one tie-breaking rule still open |
 | [[16 Dev Environment]] | How we run it while building: platform, hosts, firewall, toolchain |
-| [[17 Stage 8 Handoff]] | Working notes for the Stage 8 session: scope, the Gemini change, gotchas |
+| [[17 Stage 8 Handoff]] | The plan Stage 8 pass 1 worked from. **Superseded** — see 18 |
+| [[18 Stage 8 Pass 1 Record]] | **What Stage 8 pass 1 actually changed**, in detail. §1 is the Gemini key problem and what to do about it |
 
 ## Build stages
 | Stage | Outcome |
