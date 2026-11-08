@@ -26,6 +26,7 @@ export type IconName =
   | 'send'
   | 'back'
   | 'forward'
+  | 'up'
   | 'reset'
   | 'house'
   | 'baby'
@@ -62,6 +63,7 @@ const PATHS: Record<IconName, string> = {
   send: 'M4 12 L20 4 L14 20 L11 13 Z M11 13 L20 4',
   back: 'M15 5 L8 12 L15 19',
   forward: 'M9 5 L16 12 L9 19',
+  up: 'M5 15 L12 8 L19 15',
   reset: 'M5 12 A7 7 0 1 0 7.5 6.6 M5 4.5 V8.5 H9',
   // Goal types.
   house: 'M4 11 L12 4 L20 11 M6.5 9 V20 H17.5 V9 M10 20 V14 H14 V20',
