@@ -81,6 +81,6 @@ const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFill,
     borderWidth: 2,
-    borderRadius: 10,
+    borderRadius: 6,
   },
 });

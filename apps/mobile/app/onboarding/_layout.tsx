@@ -1,21 +1,23 @@
 import { Stack } from 'expo-router';
 import { colors } from '../../src/theme';
 
+/**
+ * Onboarding steps draw their own title band with a Back link, so no native
+ * header sits above them (the band reaches up under the status bar instead).
+ * Swipe-back still works on iOS.
+ */
 export default function OnboardingLayout() {
   return (
     <Stack
       screenOptions={{
-        headerStyle: { backgroundColor: colors.bg },
-        headerTintColor: colors.textPrimary,
-        headerShadowVisible: false,
-        headerBackTitle: 'Back',
+        headerShown: false,
         contentStyle: { backgroundColor: colors.bg },
       }}
     >
-      <Stack.Screen name="confirm" options={{ title: '' }} />
-      <Stack.Screen name="gaps" options={{ title: '' }} />
-      <Stack.Screen name="fun-money" options={{ title: '' }} />
-      <Stack.Screen name="goals" options={{ title: '' }} />
+      <Stack.Screen name="confirm" />
+      <Stack.Screen name="gaps" />
+      <Stack.Screen name="fun-money" />
+      <Stack.Screen name="goals" />
     </Stack>
   );
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
@@ -10,16 +10,17 @@ import {
   Caption,
   Loading,
   Notice,
-  Row,
   Screen,
   SectionHeader,
-  Title,
+  TitleBand,
 } from '../../src/components';
+import { Station } from '../../src/forest';
+import { Icon, goalIcon } from '../../src/icons';
 import { AddGoalSheet } from '../../src/goal-picker';
 import { memberColor, useHousehold, useHouseholdMembers } from '../../src/household';
 import { goalResult, planMonthLabel, useGoals, useProjection } from '../../src/projection';
-import { dollars, perMonth } from '../../src/format';
-import { colors, space } from '../../src/theme';
+import { dollars } from '../../src/format';
+import { colors, line, space, tabularNums, type as typeScale } from '../../src/theme';
 
 /**
  * "Goals (shared)" — 10 Screens#Onboarding, step 4, and the last step before
@@ -47,10 +48,11 @@ export default function GoalsScreen() {
 
   return (
     <Screen>
-      <Title>What are you saving for?</Title>
-      <Body dim>
-        Add a few together. Either of you can add one, and you'll both see it straight away.
-      </Body>
+      <TitleBand plate="Step 4 of 4 · Together" title="What are you saving for?" onBack={() => router.back()}>
+        <Body dim>
+          Add a few together. Either of you can add one, and you'll both see it straight away.
+        </Body>
+      </TitleBand>
 
       <View style={styles.avatars}>
         {members.map(m => (
@@ -65,39 +67,38 @@ export default function GoalsScreen() {
         <Caption>both of you, same list</Caption>
       </View>
 
-      <Button label="Add a goal" onPress={() => setAddOpen(true)} />
+      <Button label="Add a goal" variant="secondary" icon="plus" onPress={() => setAddOpen(true)} />
 
       {goals.length === 0 ? (
-        <Notice>
-          Nothing yet. A house, a trip, a car — rough numbers are fine, and you can change them
-          any time.
-        </Notice>
+        <Text style={styles.empty}>
+          Nothing yet. A house, a trip, a car: rough numbers are fine, and you can change them any
+          time.
+        </Text>
       ) : (
         <>
           <SectionHeader>Your plan so far</SectionHeader>
           {goals.map(goal => {
             const result = goalResult(projection, goal.id);
             const addedBy = members.find(m => m.id === goal.createdBy);
+            const funded = result?.funded !== false;
             return (
-              <Row
-                key={String(goal.id)}
-                label={`${goal.icon} ${goal.title}`}
-                sublabel={`${planMonthLabel(household.currentMonth, goal.targetMonth)} · ${dollars(
-                  goal.costTodayCents
-                )} today${addedBy ? ` · added by ${addedBy.displayName}` : ''}`}
-                value={result ? perMonth(Math.round(result.requiredMonthlyAtStart * 100)) : '—'}
-                right={
-                  <View
-                    style={[
-                      styles.dot,
-                      {
-                        backgroundColor:
-                          result?.funded === false ? colors.negative : colors.accent,
-                      },
-                    ]}
-                  />
-                }
-              />
+              <View key={String(goal.id)} style={styles.goal}>
+                <Icon name={goalIcon(goal.icon)} size={24} color={addedBy ? memberColor(addedBy.colorKey) : colors.ink2} />
+                <View style={styles.goalText}>
+                  <Text style={styles.goalTitle}>{goal.title}</Text>
+                  <Text style={styles.goalMeta}>
+                    {planMonthLabel(household.currentMonth, goal.targetMonth)} · {dollars(goal.costTodayCents)} today
+                    {addedBy ? ` · added by ${addedBy.displayName}` : ''}
+                  </Text>
+                </View>
+                <View style={styles.goalAmount}>
+                  <Text style={[styles.goalMonthly, tabularNums]}>
+                    {result ? dollars(Math.round(result.requiredMonthlyAtStart * 100), { showCents: true }) : '—'}
+                  </Text>
+                  <Text style={styles.goalMeta}>a month</Text>
+                </View>
+                <Station color={funded ? colors.accent : colors.error} filled={!funded} />
+              </View>
             );
           })}
 
@@ -113,10 +114,10 @@ export default function GoalsScreen() {
         </>
       )}
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
 
       <Button
-        label={goals.length === 0 ? 'Skip for now' : 'Done'}
+        label={goals.length === 0 ? 'Skip for now' : 'Done, show our plan'}
         variant={goals.length === 0 ? 'secondary' : 'primary'}
         onPress={async () => {
           setError(null);
@@ -136,6 +137,20 @@ export default function GoalsScreen() {
 }
 
 const styles = StyleSheet.create({
-  avatars: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
-  dot: { width: 8, height: 8, borderRadius: 4 },
+  avatars: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.sm },
+  empty: { ...typeScale.bodyItalic, color: colors.ink2, marginTop: space.lg },
+  goal: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    minHeight: 68,
+    paddingVertical: space.sm,
+    borderBottomWidth: line.hair,
+    borderBottomColor: colors.rule,
+  },
+  goalText: { flex: 1 },
+  goalTitle: { ...typeScale.headline, fontSize: 17, color: colors.ink },
+  goalMeta: { ...typeScale.caption, color: colors.ink2 },
+  goalAmount: { alignItems: 'flex-end' },
+  goalMonthly: { ...typeScale.numeral, fontSize: 18, color: colors.ink },
 });

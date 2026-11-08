@@ -1,10 +1,20 @@
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type ScrollViewInstance,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
 import type { LifeEventTemplateId } from '@branches/engine';
 import {
-  Avatar,
   Body,
   Button,
   Caption,
@@ -12,10 +22,9 @@ import {
   Field,
   Loading,
   Notice,
-  Screen,
-  SectionHeader,
-  Title,
+  TitleBand,
 } from '../../src/components';
+import { Icon, eventIcon } from '../../src/icons';
 import { Sheet } from '../../src/sheets';
 import { AffordabilityCard, ImpactCard } from '../../src/impact-card';
 import {
@@ -32,7 +41,7 @@ import {
 } from '../../src/events';
 import { memberColor, useHouseholdMembers, useMe } from '../../src/household';
 import { useGoals } from '../../src/projection';
-import { colors, space, type as typeScale } from '../../src/theme';
+import { COLUMN_MAX_WIDTH, colors, fonts, line, radius, space, type as typeScale } from '../../src/theme';
 
 /**
  * Chat — 10 Screens#Chat.
@@ -59,6 +68,9 @@ export default function ChatScreen() {
   const [affordOpen, setAffordOpen] = useState(false);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [sending, setSending] = useState(false);
+  const insets = useSafeAreaInsets();
+  const scrollRef = useRef<ScrollViewInstance>(null);
 
   const sendMessage = useReducer(reducers.sendMessage);
   const answerEventParam = useReducer(reducers.answerEventParam);
@@ -89,6 +101,20 @@ export default function ChatScreen() {
   // R1), so this screen no longer has to be open for the chain to run — which
   // was the bug: nothing happened unless someone was looking at Chat.
 
+  async function send() {
+    setError(null);
+    if (!draft.trim() || sending) return;
+    setSending(true);
+    try {
+      await sendMessage({ text: draft });
+      setDraft('');
+    } catch (e) {
+      setError(messageOf(e));
+    } finally {
+      setSending(false);
+    }
+  }
+
   if (!me) return <Loading label="Connecting…" />;
 
   const nameOf = (id: bigint | undefined) =>
@@ -99,76 +125,88 @@ export default function ChatScreen() {
   };
 
   return (
-    <Screen>
-      <Title>What's happening?</Title>
-      <Body dim>
-        Tell Branches when something changes and it'll work out what it means for your plan.
-      </Body>
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + space.xl }]}
+        keyboardShouldPersistTaps="handled"
+        // New messages arrive at the bottom, like any chat.
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+      >
+        <TitleBand plate="No. 3 · Chat" title="What's happening?">
+          <Body dim>
+            Tell Branches when something changes. It works out what it means for your plan, and you
+            both see the same thread.
+          </Body>
+          <View style={styles.actions}>
+            <Chip icon="leaf" label="Something came up" onPress={() => setEventFormOpen(true)} />
+            <Chip icon="question" label="Can we afford…?" onPress={() => setAffordOpen(true)} />
+          </View>
+        </TitleBand>
 
-      <View style={styles.actions}>
-        <Chip label="Something came up" onPress={() => setEventFormOpen(true)} />
-        <Chip label="Can we afford…?" onPress={() => setAffordOpen(true)} />
-      </View>
+        {goals.length === 0 ? (
+          <Notice>
+            Add a goal on the Timeline tab first. An event can only be measured against a plan.
+          </Notice>
+        ) : null}
 
-      {goals.length === 0 ? (
-        <Notice>
-          Add a goal on the Timeline tab first — an event can only be measured against a plan.
-        </Notice>
-      ) : null}
+        {messages.length === 0 && ready ? (
+          <Text style={styles.empty}>
+            Nothing yet. Tap "Something came up" when life happens: a raise, a baby, a big bill.
+          </Text>
+        ) : null}
 
-      {messages.length === 0 && ready ? (
-        <Notice>Nothing yet. Tap "Something came up" when life happens.</Notice>
-      ) : null}
-
-      <View style={styles.thread}>
-        {messages.map(message => {
-          // Captured outside the callback so the narrowing survives into it.
-          const activeEvent = event;
-          // Engine cards render as cards; everything else as a message line.
-          if (message.kind === 'impact') {
-            if (!impact || !activeEvent || message.refId !== activeEvent.id) {
+        <View style={styles.thread}>
+          {messages.map(message => {
+            // Captured outside the callback so the narrowing survives into it.
+            const activeEvent = event;
+            // Engine cards render as cards; everything else as a message line.
+            if (message.kind === 'impact') {
+              if (!impact || !activeEvent || message.refId !== activeEvent.id) {
+                return (
+                  <View key={String(message.id)} style={styles.systemLine}>
+                    <Caption>{message.text}</Caption>
+                  </View>
+                );
+              }
               return (
-                <View key={String(message.id)} style={styles.systemLine}>
-                  <Caption>{message.text}</Caption>
-                </View>
+                <ImpactCard
+                  key={String(message.id)}
+                  impact={impact}
+                  eventId={activeEvent.id}
+                  eventLabel={eventLabelFor(activeEvent.templateId)}
+                />
               );
             }
-            return (
-              <ImpactCard
-                key={String(message.id)}
-                impact={impact}
-                eventId={activeEvent.id}
-                eventLabel={eventLabelFor(activeEvent.templateId)}
-              />
-            );
-          }
 
-          if (message.kind === 'affordability' && message.payload) {
-            let payload: AffordabilityPayload | null = null;
-            try {
-              payload = JSON.parse(message.payload) as AffordabilityPayload;
-            } catch {
-              payload = null;
+            if (message.kind === 'affordability' && message.payload) {
+              let payload: AffordabilityPayload | null = null;
+              try {
+                payload = JSON.parse(message.payload) as AffordabilityPayload;
+              } catch {
+                payload = null;
+              }
+              if (payload) return <AffordabilityCard key={String(message.id)} payload={payload} />;
             }
-            if (payload) return <AffordabilityCard key={String(message.id)} payload={payload} />;
-          }
 
-          const mine = message.authorMemberId === me.id;
-          return (
-            <View key={String(message.id)} style={styles.messageRow}>
-              {message.authorMemberId !== undefined ? (
-                <Avatar
-                  name={nameOf(message.authorMemberId)}
-                  color={colorOf(message.authorMemberId)}
-                  size={24}
-                />
-              ) : (
-                <View style={styles.enginePip} />
-              )}
-              <View style={styles.messageBody}>
-                <Text style={[styles.messageAuthor, { color: colorOf(message.authorMemberId) }]}>
-                  {message.authorMemberId === undefined ? 'Branches' : mine ? 'You' : nameOf(message.authorMemberId)}
-                </Text>
+            const mine = message.authorMemberId === me.id;
+            const authorColor = colorOf(message.authorMemberId);
+            return (
+              <View key={String(message.id)} style={styles.message}>
+                <View style={styles.messageHead}>
+                  <View style={[styles.authorDot, { backgroundColor: authorColor }]} />
+                  <Text style={[styles.messageAuthor, { color: authorColor }]}>
+                    {message.authorMemberId === undefined
+                      ? 'Branches'
+                      : mine
+                        ? 'You'
+                        : nameOf(message.authorMemberId)}
+                  </Text>
+                </View>
                 <Text style={styles.messageText}>{message.text}</Text>
                 {message.chips.length > 0 && message.refId !== undefined ? (
                   <View style={styles.chipRow}>
@@ -182,60 +220,75 @@ export default function ChatScreen() {
                   </View>
                 ) : null}
               </View>
-            </View>
-          );
-        })}
-      </View>
-
-      {agent.progressText ? (
-        <View style={styles.progressRow}>
-          <View style={styles.enginePip} />
-          <Caption>{agent.progressText}</Caption>
+            );
+          })}
         </View>
-      ) : null}
 
-      {/*
-        Never-stuck (Stage 8). The agent being *registered* is not the same as
-        its service being alive: if it dies mid-job the row stops changing and
-        the progress line above would sit there indefinitely. The job is still
-        trying, so this is an offer rather than an error — and the form reaches
-        exactly the same engine.
-      */}
-      {agent.stalled ? (
-        <Notice tone="warn">
-          The assistant has been quiet for {agent.quietSeconds} seconds. You don't have to
-          wait — "Something came up" below sets the event directly, and the projection is
-          identical either way.
-        </Notice>
-      ) : null}
+        {agent.progressText ? (
+          <View style={styles.progressRow}>
+            <View style={[styles.authorDot, { backgroundColor: colors.agent }]} />
+            <Text style={styles.progressText}>{agent.progressText}</Text>
+          </View>
+        ) : null}
 
-      <SectionHeader>Say something</SectionHeader>
-      <Field value={draft} onChangeText={setDraft} placeholder="We just found out…" />
-      <Button
-        label="Send"
-        variant="secondary"
-        onPress={async () => {
-          setError(null);
-          if (!draft.trim()) return;
-          try {
-            await sendMessage({ text: draft });
-            setDraft('');
-          } catch (e) {
-            setError(messageOf(e));
-          }
-        }}
-      />
-      <Caption>
-        {hasAgent
-          ? "Just say what happened — Branches works out what it means. The forms below do the same thing if you'd rather tap."
-          : "No agent is running, so nothing will read this. Use \"Something came up\" — the projection is identical either way."}
-      </Caption>
+        {/*
+          Never-stuck (Stage 8). The agent being *registered* is not the same as
+          its service being alive: if it dies mid-job the row stops changing and
+          the progress line above would sit there indefinitely. The job is still
+          trying, so this is an offer rather than an error, and the form reaches
+          exactly the same engine.
+        */}
+        {agent.stalled ? (
+          <Notice tone="warn">
+            The assistant has been quiet for {agent.quietSeconds} seconds. You don't have to
+            wait: "Something came up" sets the event directly, and the projection is identical
+            either way.
+          </Notice>
+        ) : null}
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+        {error ? <Notice tone="error">{error}</Notice> : null}
+
+        <Text style={styles.hint}>
+          {hasAgent
+            ? 'Just say what happened and Branches works out what it means. The buttons at the top do the same thing if you would rather tap.'
+            : 'No assistant is running, so nothing will read a typed message. Use "Something came up" instead; the projection is identical either way.'}
+        </Text>
+      </ScrollView>
+
+      {/* The composer stays at the bottom and rises with the keyboard. */}
+      <View style={styles.composerDock}>
+        <View style={styles.composer}>
+          <TextInput
+            value={draft}
+            onChangeText={setDraft}
+            placeholder={hasAgent ? 'We just found out…' : 'Tap "Something came up" above'}
+            placeholderTextColor={colors.ink3}
+            style={styles.input}
+            accessibilityLabel="Message to Branches"
+            returnKeyType="send"
+            onSubmitEditing={() => void send()}
+            blurOnSubmit={false}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send"
+            accessibilityState={{ disabled: !draft.trim() || sending }}
+            disabled={!draft.trim() || sending}
+            onPress={() => void send()}
+            style={({ pressed }) => [
+              styles.send,
+              (!draft.trim() || sending) && styles.sendDisabled,
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Icon name="send" size={20} color={colors.onAccent} />
+          </Pressable>
+        </View>
+      </View>
 
       <EventFormSheet visible={eventFormOpen} onClose={() => setEventFormOpen(false)} />
       <AffordabilitySheet visible={affordOpen} onClose={() => setAffordOpen(false)} />
-    </Screen>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -328,14 +381,18 @@ function EventFormSheet({ visible, onClose }: { visible: boolean; onClose: () =>
     >
       {!templateId ? (
         <>
-          <Caption>What happened?</Caption>
+          <Text style={styles.fieldLabel}>What happened?</Text>
           <View style={styles.grid}>
             {EVENT_TEMPLATE_LIST.map(template => (
-              <Chip
+              <Pressable
                 key={template.id}
-                label={`${template.icon}  ${template.label}`}
+                accessibilityRole="button"
                 onPress={() => pick(template.id)}
-              />
+                style={({ pressed }) => [styles.tile, pressed && { backgroundColor: colors.surfaceHover }]}
+              >
+                <Icon name={eventIcon(template.id)} size={26} color={colors.accent} />
+                <Text style={styles.tileLabel}>{template.label}</Text>
+              </Pressable>
             ))}
           </View>
           <Caption>
@@ -376,9 +433,9 @@ function FormFieldRow({
 }) {
   return (
     <View style={styles.field}>
-      <Caption>{field.label}</Caption>
+      <Text style={styles.fieldLabel}>{field.label}</Text>
       {field.kind === 'number' ? (
-        <Field value={value} onChangeText={onChange} keyboardType="number-pad" />
+        <Field value={value} onChangeText={onChange} keyboardType="number-pad" label={field.label} />
       ) : (
         <View style={styles.chipRow}>
           {(field.kind === 'member'
@@ -406,10 +463,10 @@ function AffordabilitySheet({ visible, onClose }: { visible: boolean; onClose: (
 
   return (
     <Sheet visible={visible} onClose={onClose} title="Can we afford it?">
-      <Caption>What is it?</Caption>
-      <Field value={label} onChangeText={setLabel} placeholder="a couch" />
-      <Caption>How much, in dollars?</Caption>
-      <Field value={amount} onChangeText={setAmount} keyboardType="number-pad" placeholder="1200" />
+      <Text style={styles.fieldLabel}>What is it?</Text>
+      <Field value={label} onChangeText={setLabel} placeholder="a couch" label="What is it?" />
+      <Text style={[styles.fieldLabel, { marginTop: space.lg }]}>How much, in dollars?</Text>
+      <Field value={amount} onChangeText={setAmount} keyboardType="number-pad" placeholder="1200" label="Amount in dollars" />
       {error ? <Notice tone="warn">{error}</Notice> : null}
       <Button
         label="Check it"
@@ -447,22 +504,83 @@ function messageOf(error: unknown): string {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.bg },
+  scroll: { flex: 1 },
+  content: {
+    paddingHorizontal: space.sidePadding,
+    paddingBottom: space.xl,
+    width: '100%',
+    maxWidth: COLUMN_MAX_WIDTH,
+    alignSelf: 'center',
+  },
   actions: { flexDirection: 'row', gap: space.sm, marginTop: space.lg, flexWrap: 'wrap' },
-  thread: { marginTop: space.lg },
-  messageRow: { flexDirection: 'row', gap: space.sm, marginBottom: space.md, alignItems: 'flex-start' },
-  messageBody: { flex: 1 },
-  messageAuthor: { ...typeScale.caption, marginBottom: 2 },
-  messageText: { ...typeScale.body, color: colors.textPrimary, lineHeight: 21 },
+  empty: { ...typeScale.bodyItalic, color: colors.ink2, marginTop: space.md },
+  thread: { marginTop: space.sm },
+  message: {
+    paddingVertical: space.md,
+    borderBottomWidth: line.hair,
+    borderBottomColor: colors.rule,
+  },
+  messageHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.xs },
+  authorDot: { width: 8, height: 8, borderRadius: 4 },
+  messageAuthor: { ...typeScale.caption },
+  messageText: { ...typeScale.body, color: colors.ink },
   systemLine: { paddingVertical: space.sm },
   progressRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
-  enginePip: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.hairline,
+  progressText: { ...typeScale.bodyItalic, fontSize: 15, color: colors.ink2 },
+  hint: { ...typeScale.caption, color: colors.ink3, marginTop: space.lg },
+
+  composerDock: {
+    borderTopWidth: line.hair,
+    borderTopColor: colors.rule,
+    backgroundColor: colors.bg,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    alignItems: 'center',
   },
+  composer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    width: '100%',
+    maxWidth: COLUMN_MAX_WIDTH - space.md * 2,
+  },
+  input: {
+    flex: 1,
+    minHeight: 46,
+    ...typeScale.body,
+    color: colors.ink,
+    backgroundColor: colors.surface,
+    borderWidth: line.hair,
+    borderColor: colors.ruleStrong,
+    borderRadius: radius,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+  },
+  send: {
+    width: 46,
+    height: 46,
+    borderRadius: radius,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sendDisabled: { opacity: 0.35 },
+
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
-  field: { marginTop: space.md },
+  tile: {
+    width: '48%',
+    flexGrow: 1,
+    minHeight: 76,
+    borderWidth: line.hair,
+    borderColor: colors.rule,
+    borderRadius: radius,
+    padding: space.md,
+    gap: space.sm,
+    justifyContent: 'center',
+  },
+  tileLabel: { fontFamily: fonts.textMedium, fontSize: 15, color: colors.ink },
+  field: { marginTop: space.lg },
+  fieldLabel: { ...typeScale.label, color: colors.ink, marginTop: space.sm },
   chipRow: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap', marginTop: space.sm },
 });

@@ -10,7 +10,8 @@ import { useHousehold } from './household';
 import { planMonthLabel } from './projection';
 import type { AffordabilityPayload, StoredImpact } from './events';
 import { dollars } from './format';
-import { colors, space, tabularNums, type as typeScale } from './theme';
+import { Icon, eventIcon } from './icons';
+import { colors, line, space, tabularNums, type as typeScale } from './theme';
 
 /**
  * The impact card — 10 Screens#Chat.
@@ -50,7 +51,10 @@ export function ImpactCard({
 
   return (
     <View style={styles.card}>
-      <Caption>{eventLabel}</Caption>
+      <View style={styles.eventRow}>
+        <Icon name={eventIcon(templateIdFor(eventLabel))} size={18} color={colors.accent} />
+        <Text style={styles.eventLabel}>{eventLabel}</Text>
+      </View>
 
       {impact.noImpact ? (
         <>
@@ -116,7 +120,7 @@ export function ImpactCard({
 
       <Button label="Why?" variant="quiet" onPress={() => setWhyOpen(true)} />
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
 
       {impact.noImpact ? (
         <Button
@@ -200,7 +204,10 @@ export function AffordabilityCard({ payload }: { payload: AffordabilityPayload }
 
   return (
     <View style={styles.card}>
-      <Caption>Can we afford {payload.label}?</Caption>
+      <View style={styles.eventRow}>
+        <Icon name="question" size={18} color={colors.accent} />
+        <Text style={styles.eventLabel}>Can we afford {payload.label}?</Text>
+      </View>
       <Text style={[styles.headline, !payload.affordableWithoutChanges && styles.headlineAtRisk]}>
         {payload.affordableWithoutChanges
           ? 'No goal changes.'
@@ -245,19 +252,35 @@ export function AffordabilityCard({ payload }: { payload: AffordabilityPayload }
   );
 }
 
+/** The card is given a label, not an id; map it back for the icon only. */
+function templateIdFor(label: string): string | undefined {
+  const l = label.toLowerCase();
+  if (l.includes('baby')) return 'baby';
+  if (l.includes('job')) return 'job_loss';
+  if (l.includes('raise')) return 'raise';
+  if (l.includes('medical')) return 'medical_bill';
+  if (l.includes('car')) return 'car_replacement';
+  if (l.includes('windfall')) return 'windfall';
+  return undefined;
+}
+
 function messageOf(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.replace(/^.*SenderError:\s*/, '') || 'Something went wrong. Try again.';
 }
 
 const styles = StyleSheet.create({
+  // An engine result in the thread: set against a seafoam rule, never boxed.
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: space.md,
-    marginVertical: space.sm,
+    borderLeftWidth: line.path,
+    borderLeftColor: colors.accent,
+    paddingLeft: space.md,
+    paddingVertical: space.sm,
+    marginVertical: space.md,
   },
-  headline: { ...typeScale.headline, color: colors.textPrimary, marginTop: space.xs, marginBottom: space.sm },
-  headlineAtRisk: { color: colors.negative },
+  eventRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  eventLabel: { ...typeScale.label, color: colors.accent },
+  headline: { ...typeScale.title, fontSize: 24, lineHeight: 30, color: colors.ink, marginTop: space.xs, marginBottom: space.sm },
+  headlineAtRisk: { color: colors.error },
   value: { ...tabularNums },
 });

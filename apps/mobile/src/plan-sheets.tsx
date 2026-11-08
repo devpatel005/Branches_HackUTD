@@ -134,17 +134,17 @@ export function GoalDetailSheet({
 
         <SectionHeader>Change it</SectionHeader>
         <Caption>Cost today (dollars)</Caption>
-        <Field value={cost} onChangeText={setCost} keyboardType="number-pad" />
+        <Field value={cost} onChangeText={setCost} keyboardType="number-pad" label="Cost today in dollars" />
         <Caption>Target plan year (1-10)</Caption>
-        <Field value={year} onChangeText={setYear} keyboardType="number-pad" />
+        <Field value={year} onChangeText={setYear} keyboardType="number-pad" label="Target plan year, 1 to 10" />
         <Caption>Priority</Caption>
         <View style={styles.chips}>
           <Chip label="Must-have" selected={priority === 'must'} onPress={() => setPriority('must')} />
           <Chip label="Flexible" selected={priority === 'flex'} onPress={() => setPriority('flex')} />
         </View>
 
-        {error ? <Notice tone="warn">{error}</Notice> : null}
-        <Button label="Save" onPress={save} />
+        {error ? <Notice tone="error">{error}</Notice> : null}
+        <Button label="Save changes" onPress={save} />
         <Button
           label="Remove this goal"
           variant="quiet"
@@ -232,11 +232,11 @@ export function AssumptionsSheet({
       </Body>
 
       <SectionHeader>Savings rate (assumed, annual %)</SectionHeader>
-      <Field value={savings} onChangeText={setSavings} keyboardType="number-pad" />
+      <Field value={savings} onChangeText={setSavings} keyboardType="number-pad" label="Savings rate, annual percent" />
       <Caption>What set-aside money is assumed to earn. Compounded monthly.</Caption>
 
       <SectionHeader>Inflation (annual %)</SectionHeader>
-      <Field value={inflation} onChangeText={setInflation} keyboardType="number-pad" />
+      <Field value={inflation} onChangeText={setInflation} keyboardType="number-pad" label="Inflation, annual percent" />
       <Caption>Applied to goal costs only, so a goal costs more the later it lands.</Caption>
 
       {assumptions ? (
@@ -248,8 +248,8 @@ export function AssumptionsSheet({
         </>
       ) : null}
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
-      <Button label="Save" onPress={save} />
+      {error ? <Notice tone="error">{error}</Notice> : null}
+      <Button label="Apply to our plan" onPress={save} />
     </Sheet>
   );
 }

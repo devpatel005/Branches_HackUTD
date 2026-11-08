@@ -10,34 +10,118 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { FernLeaf } from './forest';
+import { Icon, type IconName } from './icons';
 import { useConnectionTrouble } from './spacetime';
-import { colors, space, tabularNums, type as typeScale } from './theme';
+import {
+  COLUMN_MAX_WIDTH,
+  WEB_MAX_WIDTH,
+  colors,
+  fonts,
+  line,
+  radius,
+  space,
+  tabularNums,
+  type as typeScale,
+} from './theme';
 
 /**
- * Shared primitives built from 09 Design System.
+ * Shared primitives — "Field Guide at Dusk".
  *
- * Deliberately unanimated: Stage 8 owns motion, haptics and number rolling.
- * What is here is the structure those will attach to — hairline rows rather
- * than boxed cards, one bright accent, colour only for meaning.
+ * Structure comes from rules and alignment, the way a park field guide is set:
+ * a title band at the top of each screen, ruled rows, and no boxes except the
+ * branch cards (the thing you choose). Flat colour, one 6px radius, 44px targets.
  */
 
 export function Screen({
   children,
   scroll = true,
+  wide = false,
 }: {
   children: ReactNode;
   scroll?: boolean;
+  /** The live session only: let the branch cards sit in a row on a laptop. */
+  wide?: boolean;
 }) {
-  if (!scroll) return <View style={styles.screenStatic}>{children}</View>;
+  // No navigation header sits above these screens, so the content clears the
+  // status bar / notch itself. A TitleBand or canopy at the top bleeds back up
+  // under it (see useTopBleed).
+  const insets = useSafeAreaInsets();
+  const frame = { maxWidth: wide ? WEB_MAX_WIDTH : COLUMN_MAX_WIDTH, paddingTop: insets.top + space.xl };
+  if (!scroll) return <View style={[styles.screenStatic, frame]}>{children}</View>;
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.screenContent}>
+    <ScrollView
+      style={styles.screen}
+      contentContainerStyle={[styles.screenContent, frame, { paddingBottom: space.hero + insets.bottom }]}
+      keyboardShouldPersistTaps="handled"
+    >
       {children}
     </ScrollView>
   );
 }
 
+/**
+ * How far a full-bleed header (TitleBand, ForestCanopy) must reach up to cover
+ * the status bar, and how much padding it then needs so its own text clears it.
+ */
+export function useTopBleed() {
+  const insets = useSafeAreaInsets();
+  return { marginTop: -(space.xl + insets.top), inset: insets.top };
+}
+
+/**
+ * The field-guide title band: a flat strip of canopy colour across the top of
+ * a screen, a small plate number, the title, and a specimen leaf cropped by the
+ * right edge. Bleeds past the screen padding on purpose.
+ */
+export function TitleBand({
+  plate,
+  title,
+  children,
+  onBack,
+  top,
+}: {
+  plate: string;
+  title: string;
+  children?: ReactNode;
+  /** Onboarding steps: a back link in the band instead of a native header. */
+  onBack?: () => void;
+  /** Anything that belongs above the plate (the session's presence row). */
+  top?: ReactNode;
+}) {
+  const bleed = useTopBleed();
+  return (
+    <View style={[styles.band, { marginTop: bleed.marginTop, paddingTop: space.xxl + bleed.inset }]}>
+      <FernLeaf size={190} angle={-200} opacity={0.4} style={[styles.bandLeaf, { top: -28 + bleed.inset }]} />
+      {onBack ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+          onPress={onBack}
+          hitSlop={8}
+          style={({ pressed }) => [styles.back, pressed && styles.pressed]}
+        >
+          <Icon name="back" size={20} color={colors.ink} />
+          <Text style={styles.backText}>Back</Text>
+        </Pressable>
+      ) : null}
+      {top}
+      <Text style={styles.plate}>{plate}</Text>
+      <Text style={styles.bandTitle} accessibilityRole="header">
+        {title}
+      </Text>
+      {children ? <View style={styles.bandBody}>{children}</View> : null}
+    </View>
+  );
+}
+
 export function Title({ children }: { children: ReactNode }) {
-  return <Text style={styles.title}>{children}</Text>;
+  return (
+    <Text style={styles.title} accessibilityRole="header">
+      {children}
+    </Text>
+  );
 }
 
 export function Headline({ children }: { children: ReactNode }) {
@@ -52,7 +136,7 @@ export function Caption({ children, color }: { children: ReactNode; color?: stri
   return <Text style={[styles.caption, color ? { color } : null]}>{children}</Text>;
 }
 
-/** One big number per screen (09 Design System#Principles). */
+/** One big number per screen. */
 export function Hero({ value, caption }: { value: string; caption: string }) {
   return (
     <View style={styles.hero}>
@@ -67,15 +151,27 @@ export function Button({
   onPress,
   variant = 'primary',
   disabled,
+  icon,
 }: {
   label: string;
   onPress: () => void;
-  variant?: 'primary' | 'secondary' | 'quiet';
+  /** `danger` is for the one irreversible control (Menu's reset). */
+  variant?: 'primary' | 'secondary' | 'quiet' | 'danger' | 'dangerArmed';
   disabled?: boolean;
+  icon?: IconName;
 }) {
+  const tint =
+    variant === 'primary' || variant === 'dangerArmed'
+      ? colors.onAccent
+      : variant === 'secondary'
+        ? colors.ink
+        : variant === 'danger'
+          ? colors.error
+          : colors.ink2;
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ disabled: !!disabled }}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -83,14 +179,18 @@ export function Button({
         variant === 'primary' && styles.buttonPrimary,
         variant === 'secondary' && styles.buttonSecondary,
         variant === 'quiet' && styles.buttonQuiet,
-        pressed && styles.pressed,
+        variant === 'danger' && styles.buttonDanger,
+        variant === 'dangerArmed' && styles.buttonDangerArmed,
+        pressed && (variant === 'primary' ? styles.pressedPrimary : styles.pressed),
         disabled && styles.disabled,
       ]}
     >
+      {icon ? <Icon name={icon} size={18} color={tint} /> : null}
       <Text
         style={[
           styles.buttonLabel,
-          variant === 'primary' ? styles.buttonLabelPrimary : styles.buttonLabelSecondary,
+          { color: tint },
+          variant === 'quiet' && styles.buttonLabelQuiet,
         ]}
       >
         {label}
@@ -99,35 +199,45 @@ export function Button({
   );
 }
 
-/** Rounded pill for follow-up answers, locks, pins and goal picks. */
+/** Answers, locks, pins and goal picks. Same 6px radius as everything else. */
 export function Chip({
   label,
   onPress,
   selected,
   tint,
+  icon,
+  accessibilityLabel,
 }: {
   label: string;
   onPress?: () => void;
   selected?: boolean;
   tint?: string;
+  icon?: IconName;
+  accessibilityLabel?: string;
 }) {
+  const color = selected ? tint ?? colors.accent : colors.ink2;
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ selected: !!selected, disabled: !onPress }}
       disabled={!onPress}
       onPress={onPress}
       style={({ pressed }) => [
         styles.chip,
-        selected && { backgroundColor: colors.surfaceRaised, borderColor: tint ?? colors.accent },
+        selected && { backgroundColor: colors.surfaceRaised, borderColor: color },
         pressed && styles.pressed,
       ]}
     >
-      <Text style={[styles.chipLabel, selected && { color: colors.textPrimary }]}>{label}</Text>
+      {icon ? <Icon name={icon} size={18} color={color} /> : null}
+      {label ? (
+        <Text style={[styles.chipLabel, selected && { color: colors.ink }]}>{label}</Text>
+      ) : null}
     </Pressable>
   );
 }
 
-/** Lists are hairline-separated rows, not boxed cards. Row height ~64px. */
+/** Lists are ruled rows, not boxed cards. Row height 64px. */
 export function Row({
   label,
   value,
@@ -146,7 +256,7 @@ export function Row({
   const content = (
     <View style={[styles.row, style]}>
       <View style={styles.rowText}>
-        <Text style={styles.body}>{label}</Text>
+        <Text style={styles.rowLabel}>{label}</Text>
         {sublabel ? <Text style={styles.rowSub}>{sublabel}</Text> : null}
       </View>
       {value ? <Text style={[styles.rowValue, tabularNums]}>{value}</Text> : null}
@@ -155,17 +265,29 @@ export function Row({
   );
   if (!onPress) return content;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => pressed && styles.pressed}>
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => pressed && styles.pressedRow}
+    >
       {content}
     </Pressable>
   );
 }
 
+/** A short seafoam path-tick, then the heading. Sentence case, never all caps. */
 export function SectionHeader({ children }: { children: ReactNode }) {
-  return <Text style={styles.sectionHeader}>{children}</Text>;
+  return (
+    <View style={styles.sectionHeader}>
+      <View style={styles.sectionTick} />
+      <Text style={styles.sectionHeaderText} accessibilityRole="header">
+        {children}
+      </Text>
+    </View>
+  );
 }
 
-/** A member's avatar: initial on a disc in their colour. Dimmed when absent. */
+/** A member: their initial inside a thin ring of their colour. Dimmed when away. */
 export function Avatar({
   name,
   color,
@@ -179,25 +301,26 @@ export function Avatar({
 }) {
   return (
     <View
+      accessibilityLabel={`${name}${online ? '' : ', away'}`}
       style={[
         styles.avatar,
         {
           width: size,
           height: size,
           borderRadius: size / 2,
-          backgroundColor: color,
-          opacity: online ? 1 : 0.35,
+          borderColor: color,
+          opacity: online ? 1 : 0.4,
         },
       ]}
     >
-      <Text style={[styles.avatarLabel, { fontSize: size * 0.45 }]}>
+      <Text style={[styles.avatarLabel, { color, fontSize: size * 0.44, lineHeight: size * 0.6 }]}>
         {(name.trim()[0] ?? '?').toUpperCase()}
       </Text>
     </View>
   );
 }
 
-/** "Jordan: 4 of 5" — counts only, from the module's progress view. */
+/** "Jordan: 3 of 4" — counts only. */
 export function ProgressPill({
   name,
   color,
@@ -213,9 +336,9 @@ export function ProgressPill({
 }) {
   return (
     <View style={styles.progressPill}>
-      <Avatar name={name} color={color} online={online} size={24} />
-      <Text style={styles.progressText}>
-        {name}: {done} of {total}
+      <View style={[styles.progressDot, { backgroundColor: color, opacity: online ? 1 : 0.4 }]} />
+      <Text style={[styles.progressText, tabularNums]}>
+        <Text style={{ color }}>{name}</Text>: {done} of {total}
       </Text>
     </View>
   );
@@ -229,6 +352,7 @@ export function Field({
   keyboardType = 'default',
   maxLength,
   align = 'left',
+  label,
 }: {
   value: string;
   onChangeText: (next: string) => void;
@@ -237,17 +361,26 @@ export function Field({
   keyboardType?: 'default' | 'number-pad';
   maxLength?: number;
   align?: 'left' | 'center';
+  label?: string;
 }) {
+  const [focused, setFocused] = useState(false);
   return (
     <TextInput
       value={value}
       onChangeText={onChangeText}
       placeholder={placeholder}
-      placeholderTextColor={colors.textSecondary}
+      placeholderTextColor={colors.ink3}
       autoCapitalize={autoCapitalize}
       keyboardType={keyboardType}
       maxLength={maxLength}
-      style={[styles.field, align === 'center' && styles.fieldCentered]}
+      accessibilityLabel={label ?? placeholder}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={[
+        styles.field,
+        focused && styles.fieldFocused,
+        align === 'center' && styles.fieldCentered,
+      ]}
     />
   );
 }
@@ -256,25 +389,20 @@ export function Divider() {
   return <View style={styles.divider} />;
 }
 
-/** Only render this when there are no rows *and* the table is not ready. */
-/** How long a spinner may sit there before it owes the user an explanation. */
 const SLOW_MS = 8000;
 
 /**
- * A loading state that cannot become a dead end.
+ * Only render this when there are no rows *and* the table is not ready
+ * (14 Research Notes: the isReady flashing bug).
  *
- * Six screens short-circuit to this while they wait for a row, and every one of
- * them used to spin indefinitely if the row never came — which is precisely
- * what happens when the server is not running, the module is not published, or
- * the host is wrong. None of those resolve by waiting.
- *
- * So after `SLOW_MS` it says what it is waiting for, names the connection
- * problem if there is one, and offers a reload. Fixing it here rather than at
- * the six call sites means a screen added later gets the same floor for free.
+ * Never-stuck (Stage 8, checked by verify:screens S2): six screens fall back to
+ * this, so it cannot wait in silence. After SLOW_MS it says what it is waiting
+ * for, names the connection problem when there is one, and offers a reload.
  */
 export function Loading({ label = 'Loading…', hint }: { label?: string; hint?: string }) {
   const [slow, setSlow] = useState(false);
   const { error, host } = useConnectionTrouble();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     const timer = setTimeout(() => setSlow(true), SLOW_MS);
@@ -282,21 +410,19 @@ export function Loading({ label = 'Loading…', hint }: { label?: string; hint?:
   }, []);
 
   return (
-    <View style={styles.loading}>
-      <Text style={styles.caption}>{label}</Text>
+    <View style={[styles.loading, { paddingTop: space.hero + insets.top }]} accessibilityRole="progressbar" accessibilityLabel={label}>
+      <FernLeaf size={72} angle={-60} opacity={0.6} />
+      <Text style={styles.loadingText}>{label}</Text>
 
       {slow || error ? (
         <View style={styles.loadingHelp}>
-          <Text style={styles.caption}>
+          <Text style={styles.loadingHint}>
             {error
               ? `Can't reach the planner at ${host}. ${error}`
               : hint ?? 'This is taking longer than it should.'}
           </Text>
-          {/*
-            Reload is the only recovery the app can offer by itself: the
-            connection is owned by the provider above, and a failed first
-            connect leaves nothing to retry against.
-          */}
+          {/* Reload is the only recovery the app can offer by itself: the
+              connection is owned by the provider above. */}
           {Platform.OS === 'web' ? (
             <Button
               label="Reload"
@@ -306,7 +432,7 @@ export function Loading({ label = 'Loading…', hint }: { label?: string; hint?:
               }}
             />
           ) : (
-            <Text style={styles.caption}>Close and reopen the app to try again.</Text>
+            <Text style={styles.loadingHint}>Close and reopen the app to try again.</Text>
           )}
         </View>
       ) : null}
@@ -314,96 +440,192 @@ export function Loading({ label = 'Loading…', hint }: { label?: string; hint?:
   );
 }
 
-export function Notice({ children, tone = 'quiet' }: { children: ReactNode; tone?: 'quiet' | 'warn' }) {
+/** A note set against a single vertical rule — never a box. */
+export function Notice({
+  children,
+  tone = 'quiet',
+}: {
+  children: ReactNode;
+  tone?: 'quiet' | 'warn' | 'error';
+}) {
+  const ruleColor =
+    tone === 'warn' ? colors.warn : tone === 'error' ? colors.error : colors.ruleStrong;
   return (
-    <View style={[styles.notice, tone === 'warn' && styles.noticeWarn]}>
-      <Text style={styles.noticeText}>{children}</Text>
+    <View style={[styles.notice, { borderLeftColor: ruleColor }]}>
+      <Text style={[styles.noticeText, tone !== 'quiet' && { color: colors.ink }]}>{children}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  loadingHelp: { marginTop: space.lg, gap: space.sm, maxWidth: 420, alignItems: 'center' },
   screen: { flex: 1, backgroundColor: colors.bg },
-  screenContent: { padding: space.sidePadding, paddingTop: space.lg, paddingBottom: space.xl * 2 },
-  screenStatic: { flex: 1, backgroundColor: colors.bg, padding: space.sidePadding, paddingTop: space.lg },
+  screenContent: {
+    paddingHorizontal: space.sidePadding,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  screenStatic: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    paddingHorizontal: space.sidePadding,
+    width: '100%',
+    alignSelf: 'center',
+  },
 
-  display: { ...typeScale.display, color: colors.textPrimary },
-  title: { ...typeScale.title, color: colors.textPrimary, marginBottom: space.sm },
-  headline: { ...typeScale.headline, color: colors.textPrimary },
-  body: { ...typeScale.body, color: colors.textPrimary },
-  caption: { ...typeScale.caption, color: colors.textSecondary },
-  dim: { color: colors.textSecondary },
+  band: {
+    backgroundColor: colors.band,
+    marginHorizontal: -space.sidePadding,
+    marginBottom: space.xxl,
+    paddingHorizontal: space.sidePadding,
+    paddingBottom: space.xl,
+    borderBottomWidth: line.hair,
+    borderBottomColor: colors.ruleStrong,
+    overflow: 'hidden',
+  },
+  bandLeaf: { position: 'absolute', right: -64 },
+  back: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    paddingRight: space.md,
+    marginTop: -space.lg,
+    marginBottom: space.xs,
+    marginLeft: -6,
+  },
+  backText: { ...typeScale.label, color: colors.ink },
+  plate: { ...typeScale.plate, color: colors.accent, marginBottom: space.sm },
+  bandTitle: { ...typeScale.title, color: colors.ink, maxWidth: '82%' },
+  bandBody: { marginTop: space.md, maxWidth: 440 },
 
-  hero: { marginBottom: space.lg },
+  display: { ...typeScale.display, color: colors.ink },
+  title: { ...typeScale.title, color: colors.ink, marginBottom: space.sm },
+  headline: { ...typeScale.headline, color: colors.ink },
+  body: { ...typeScale.body, color: colors.ink },
+  caption: { ...typeScale.caption, color: colors.ink2 },
+  dim: { color: colors.ink2 },
 
-  button: { borderRadius: 12, paddingVertical: space.md, alignItems: 'center', marginTop: space.md },
+  hero: { marginBottom: space.lg, alignItems: 'center' },
+
+  button: {
+    minHeight: 50,
+    borderRadius: radius,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: space.sm,
+    marginTop: space.md,
+  },
   buttonPrimary: { backgroundColor: colors.accent },
-  buttonSecondary: { backgroundColor: colors.surfaceRaised },
-  buttonQuiet: { backgroundColor: 'transparent', paddingVertical: space.sm },
-  buttonLabel: { ...typeScale.body, fontWeight: '600' },
-  buttonLabelPrimary: { color: colors.bg },
-  buttonLabelSecondary: { color: colors.textPrimary },
-  pressed: { opacity: 0.6 },
-  disabled: { opacity: 0.3 },
+  buttonSecondary: {
+    backgroundColor: 'transparent',
+    borderWidth: line.hair,
+    borderColor: colors.ruleStrong,
+  },
+  buttonQuiet: { backgroundColor: 'transparent', minHeight: 44, paddingVertical: space.sm },
+  buttonDanger: { backgroundColor: 'transparent', borderWidth: line.hair, borderColor: colors.error },
+  buttonDangerArmed: { backgroundColor: colors.error },
+  buttonLabel: { fontFamily: fonts.textSemi, fontSize: 16, lineHeight: 22 },
+  buttonLabelQuiet: { fontFamily: fonts.textMedium, textDecorationLine: 'underline' },
+  pressed: { backgroundColor: colors.surfaceHover },
+  pressedPrimary: { opacity: 0.85 },
+  pressedRow: { backgroundColor: colors.surface },
+  disabled: { opacity: 0.4 },
 
   chip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    backgroundColor: colors.surface,
+    borderRadius: radius,
+    borderWidth: line.hair,
+    borderColor: colors.rule,
+    backgroundColor: 'transparent',
     paddingHorizontal: space.md,
-    paddingVertical: space.sm + 2,
+    paddingVertical: space.sm,
+    minHeight: 44,
+    minWidth: 44,
+    flexDirection: 'row',
+    gap: space.xs + 2,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  chipLabel: { ...typeScale.body, color: colors.textSecondary },
+  chipLabel: { ...typeScale.label, color: colors.ink2 },
 
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     minHeight: 64,
     gap: space.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.hairline,
+    paddingVertical: space.sm,
+    borderBottomWidth: line.hair,
+    borderBottomColor: colors.rule,
   },
   rowText: { flex: 1 },
-  rowSub: { ...typeScale.caption, color: colors.textSecondary, marginTop: 2 },
-  rowValue: { ...typeScale.body, color: colors.textSecondary },
+  rowLabel: { fontFamily: fonts.textMedium, fontSize: 16, lineHeight: 22, color: colors.ink },
+  rowSub: { ...typeScale.caption, color: colors.ink2, marginTop: 2 },
+  rowValue: { ...typeScale.numeral, fontSize: 18, color: colors.ink },
 
   sectionHeader: {
-    ...typeScale.caption,
-    color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginTop: space.lg,
-    marginBottom: space.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.xxl,
+    marginBottom: space.sm,
   },
+  sectionTick: { width: 14, height: line.path, backgroundColor: colors.accent },
+  sectionHeaderText: { ...typeScale.label, color: colors.ink2 },
 
-  avatar: { alignItems: 'center', justifyContent: 'center' },
-  avatarLabel: { color: colors.bg, fontWeight: '700' },
+  avatar: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: line.path,
+    backgroundColor: colors.bg,
+  },
+  avatarLabel: { fontFamily: fonts.textSemi },
 
-  progressPill: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  progressText: { ...typeScale.caption, color: colors.textSecondary },
+  progressPill: { flexDirection: 'row', alignItems: 'center', gap: space.sm, minHeight: 28 },
+  progressDot: { width: 8, height: 8, borderRadius: 4 },
+  progressText: { ...typeScale.caption, color: colors.ink2 },
 
   field: {
     ...typeScale.body,
-    color: colors.textPrimary,
-    backgroundColor: colors.surfaceRaised,
-    borderRadius: 10,
+    color: colors.ink,
+    backgroundColor: colors.surface,
+    borderRadius: radius,
+    borderWidth: line.hair,
+    borderColor: colors.ruleStrong,
     paddingHorizontal: space.md,
     paddingVertical: space.md,
+    minHeight: 50,
     marginTop: space.sm,
   },
-  fieldCentered: { textAlign: 'center', letterSpacing: 6, fontSize: 24, fontWeight: '700' },
+  fieldFocused: { borderColor: colors.accent },
+  fieldCentered: {
+    textAlign: 'center',
+    letterSpacing: 8,
+    fontFamily: fonts.numeral,
+    fontSize: 28,
+  },
 
-  divider: { height: 1, backgroundColor: colors.hairline, marginVertical: space.md },
-  loading: { paddingVertical: space.xl, alignItems: 'center', paddingHorizontal: space.sidePadding },
+  divider: { height: line.hair, backgroundColor: colors.rule, marginVertical: space.lg },
+
+  loading: {
+    flex: 1,
+    backgroundColor: colors.bg,
+    paddingHorizontal: space.sidePadding,
+    paddingBottom: space.hero,
+    alignItems: 'center',
+    gap: space.md,
+  },
+  loadingText: { ...typeScale.bodyItalic, color: colors.ink2 },
+  loadingHelp: { marginTop: space.md, gap: space.sm, maxWidth: 420, alignItems: 'center' },
+  loadingHint: { ...typeScale.caption, color: colors.ink2, textAlign: 'center' },
 
   notice: {
-    backgroundColor: colors.surface,
-    borderRadius: 10,
-    padding: space.md,
-    marginTop: space.md,
+    borderLeftWidth: 2,
+    paddingLeft: space.md,
+    paddingVertical: space.xs,
+    marginTop: space.lg,
   },
-  noticeWarn: { backgroundColor: colors.surfaceRaised },
-  noticeText: { ...typeScale.caption, color: colors.textSecondary, lineHeight: 18 },
+  noticeText: { ...typeScale.caption, fontSize: 14, lineHeight: 20, color: colors.ink2 },
 });

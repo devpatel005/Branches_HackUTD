@@ -14,8 +14,9 @@ import {
   Row,
   Screen,
   SectionHeader,
-  Title,
+  TitleBand,
 } from '../../src/components';
+import { Icon } from '../../src/icons';
 import {
   memberColor,
   useHousehold,
@@ -29,21 +30,17 @@ import {
   loadPrivatePurchases,
   totalCents,
 } from '../../src/private-purchases';
-import { colors, space, tabularNums, type as typeScale } from '../../src/theme';
+import { colors, space, tabularNums, type as typeScale, radius } from '../../src/theme';
 
 const STEP_CENTS = 2500;
 const DEFAULT_CENTS = 30000;
 
 /**
- * "Your fun money" — 10 Screens#Onboarding, step 3.
+ * "Your fun money" — 10 Screens#Onboarding, step 3 (Washington Evergreen & Privacy Architecture).
  *
  * The amount is shared. The purchases are not, and never will be: they live
  * only in device-local storage, and the only thing this screen reports upward
  * is a `within` / `over` status (02 Ground Rules #3).
- *
- * The purchase list below is rendered straight from local storage. It has no
- * path to SpacetimeDB — `setFunMoneyStatus` takes a status and a carryover, and
- * nothing else.
  */
 export default function FunMoneyScreen() {
   const router = useRouter();
@@ -82,9 +79,7 @@ export default function FunMoneyScreen() {
     setError(null);
     try {
       await setFunMoney({ monthlyCents: cents });
-      // Computed here, on the owner's device, from data that never leaves it.
       await setFunMoneyStatus({ status, carryoverCents });
-      // Goals are step 4 and the last one; it calls finishOnboarding.
       router.push('/onboarding/goals');
     } catch (e) {
       setError(messageOf(e));
@@ -93,14 +88,16 @@ export default function FunMoneyScreen() {
 
   return (
     <Screen>
-      <Title>Your fun money</Title>
-      <Body dim>
-        Yours to spend without a conversation. Your partner sees the amount, never what you buy.
-      </Body>
+      <TitleBand plate="Step 3 of 4" title="Your fun money." onBack={() => router.back()}>
+        <Body dim>
+          A monthly amount that's yours to spend without a conversation. Your partner sees the
+          amount and whether you're within it, never what you buy.
+        </Body>
+      </TitleBand>
 
       <View style={styles.stepper}>
         <StepButton
-          glyph="−"
+          icon="minus"
           onPress={() => setCents(c => Math.max(0, c - STEP_CENTS))}
           label="Decrease fun money"
         />
@@ -108,16 +105,17 @@ export default function FunMoneyScreen() {
           <Hero value={dollars(cents)} caption="a month, each" />
         </View>
         <StepButton
-          glyph="+"
+          icon="plus"
           onPress={() => setCents(c => c + STEP_CENTS)}
           label="Increase fun money"
         />
       </View>
 
       <SectionHeader>My purchases this month</SectionHeader>
-      <Caption color={colors.textSecondary}>
-        On this device only. Not stored in the shared plan, and never shown to the agent.
-      </Caption>
+      <View style={styles.privateNote}>
+        <Icon name="lock" size={16} color={colors.ink2} />
+        <Caption>On this device only. Not in the shared plan, and never shown to the assistant.</Caption>
+      </View>
 
       {purchases.map(p => (
         <Row
@@ -150,7 +148,7 @@ export default function FunMoneyScreen() {
 
       {error ? <Notice tone="warn">{error}</Notice> : null}
 
-      <Button label="Next" onPress={saveAndContinue} />
+      <Button label="Set my fun money" onPress={saveAndContinue} />
 
       <View style={styles.progressRow}>
         {progress.partners.map(p => (
@@ -169,11 +167,11 @@ export default function FunMoneyScreen() {
 }
 
 function StepButton({
-  glyph,
+  icon,
   onPress,
   label,
 }: {
-  glyph: string;
+  icon: 'plus' | 'minus';
   onPress: () => void;
   label: string;
 }) {
@@ -182,9 +180,9 @@ function StepButton({
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      style={({ pressed }) => [styles.stepButton, pressed && { opacity: 0.5 }]}
+      style={({ pressed }) => [styles.stepButton, pressed && { backgroundColor: colors.surfaceHover }]}
     >
-      <Text style={styles.stepGlyph}>{glyph}</Text>
+      <Icon name={icon} size={22} color={colors.ink} />
     </Pressable>
   );
 }
@@ -200,24 +198,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: space.xl,
+    paddingVertical: space.md,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: colors.hairline,
   },
   amount: { flex: 1, alignItems: 'center' },
   stepButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: colors.surfaceRaised,
+    width: 56,
+    height: 56,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.ruleStrong,
+    backgroundColor: 'transparent',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepGlyph: { ...typeScale.headline, color: colors.textPrimary, fontSize: 24 },
+  privateNote: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.sm },
   totalRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingVertical: space.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairline,
   },
   totalLabel: { ...typeScale.body, color: colors.textSecondary },
-  totalValue: { ...typeScale.body, color: colors.textPrimary, fontWeight: '600' },
+  totalValue: { ...typeScale.numeral, fontSize: 18, color: colors.textPrimary },
   progressRow: { flexDirection: 'row', gap: space.md, marginTop: space.xl, flexWrap: 'wrap' },
 });

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Platform, View, StyleSheet } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
 import {
@@ -8,14 +8,15 @@ import {
   Button,
   Caption,
   Field,
-  Hero,
   Notice,
   Screen,
   SectionHeader,
-  Title,
+  TitleBand,
+  useTopBleed,
 } from '../src/components';
+import { BranchPaths, ForestCanopy } from '../src/forest';
 import { useHousehold, useHouseholdMembers, useMe, memberColor } from '../src/household';
-import { colors, space } from '../src/theme';
+import { colors, fonts, line, space, type as typeScale } from '../src/theme';
 
 /**
  * Welcome — 10 Screens#Welcome.
@@ -23,6 +24,9 @@ import { colors, space } from '../src/theme';
  * Three states: choose, show-my-code (waiting for a partner), enter-a-code.
  * Designed for the reluctant partner: nothing to type but a name and six
  * characters (03 User Journey#Persona).
+ *
+ * One dominant action ("Start a household"); joining is the quieter second
+ * path, since the person holding a code already knows why they are here.
  */
 type Mode = 'choose' | 'start' | 'join';
 
@@ -31,6 +35,8 @@ export default function WelcomeScreen() {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const bleed = useTopBleed();
 
   const createHousehold = useReducer(reducers.createHousehold);
   const joinHousehold = useReducer(reducers.joinHousehold);
@@ -47,10 +53,13 @@ export default function WelcomeScreen() {
 
   async function start() {
     setError(null);
+    setBusy(true);
     try {
       await createHousehold({ displayName: name.trim() || 'Partner A' });
     } catch (e) {
       setError(messageOf(e));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -58,46 +67,68 @@ export default function WelcomeScreen() {
     setError(null);
     const trimmed = code.trim().toUpperCase();
     if (trimmed.length !== 6) {
-      setError('A join code is six characters.');
+      setError('A join code is six characters. Check for a letter that looks like a number.');
       return;
     }
+    setBusy(true);
     try {
       await joinHousehold({ joinCode: trimmed, displayName: name.trim() || 'Partner B' });
     } catch (e) {
       setError(messageOf(e));
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
     <Screen>
-      <View style={styles.header}>
-        <Title>Branches</Title>
-        <Body dim>
-          A shared plan for the two of you — and the paths forward when life changes.
-        </Body>
+      <ForestCanopy height={250 + bleed.inset} style={[styles.canopy, { marginTop: bleed.marginTop }]} seed={19}>
+        <View style={[styles.wordmarkWrap, { paddingTop: space.xl + bleed.inset }]}>
+          <Text style={styles.plate}>A plan for two</Text>
+          <Text style={styles.wordmark} accessibilityRole="header">
+            Branches
+          </Text>
+        </View>
+      </ForestCanopy>
+
+      <Text style={styles.pitch}>
+        Two incomes, one plan. When life changes, see the paths forward and choose one together.
+      </Text>
+
+      {/* The signature, small: one path that forks. */}
+      <View style={styles.fork}>
+        <BranchPaths
+          lanes={[{ color: colors.memberA, chosen: true }, { color: colors.ink3 }, { color: colors.memberB, chosen: true }]}
+          height={56}
+        />
       </View>
 
       {mode === 'choose' ? (
         <View style={styles.actions}>
           <Button label="Start a household" onPress={() => setMode('start')} />
-          <Button label="Join a household" variant="secondary" onPress={() => setMode('join')} />
+          <Button label="I have a join code" variant="quiet" onPress={() => setMode('join')} />
         </View>
       ) : null}
 
       {mode === 'start' ? (
         <View style={styles.actions}>
-          <Caption>Your name</Caption>
-          <Field value={name} onChangeText={setName} placeholder="Maya" />
-          <Button label="Create our household" onPress={start} />
+          <Text style={styles.label}>What should we call you?</Text>
+          <Field value={name} onChangeText={setName} placeholder="Maya" label="Your name" />
+          <Caption>Your partner sees this name.</Caption>
+          <Button
+            label={busy ? 'Creating…' : 'Create our household'}
+            onPress={start}
+            disabled={busy}
+          />
           <Button label="Back" variant="quiet" onPress={() => setMode('choose')} />
         </View>
       ) : null}
 
       {mode === 'join' ? (
         <View style={styles.actions}>
-          <Caption>Your name</Caption>
-          <Field value={name} onChangeText={setName} placeholder="Jordan" />
-          <Caption>Join code</Caption>
+          <Text style={styles.label}>What should we call you?</Text>
+          <Field value={name} onChangeText={setName} placeholder="Jordan" label="Your name" />
+          <Text style={[styles.label, { marginTop: space.lg }]}>Your partner's join code</Text>
           <Field
             value={code}
             onChangeText={next => setCode(next.toUpperCase())}
@@ -105,17 +136,18 @@ export default function WelcomeScreen() {
             autoCapitalize="characters"
             maxLength={6}
             align="center"
+            label="Join code, six characters"
           />
-          <Button label="Join" onPress={join} />
+          <Button label={busy ? 'Joining…' : 'Join household'} onPress={join} disabled={busy} />
           <Button label="Back" variant="quiet" onPress={() => setMode('choose')} />
         </View>
       ) : null}
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
 
       <Notice>
-        Mock data only. Nothing here connects to a real bank, and your fun-money
-        purchases never leave this device.
+        Projections from assumptions you can see and edit, not financial advice. Mock data only:
+        nothing connects to a real bank, and fun-money purchases never leave this device.
       </Notice>
     </Screen>
   );
@@ -140,8 +172,13 @@ function WaitingForPartner({ code }: { code: string }) {
 
   return (
     <Screen>
-      <Hero value={code} caption="Your join code" />
-      <Body dim>Open Branches on your partner's device and enter this code.</Body>
+      <TitleBand plate="Your join code" title="Waiting for your partner">
+        <Body dim>Open Branches on your partner's phone and enter this code.</Body>
+      </TitleBand>
+
+      <Text style={styles.code} accessibilityLabel={`Join code ${code.split('').join(' ')}`}>
+        {code}
+      </Text>
 
       <View style={styles.avatars}>
         {members.map(m => (
@@ -150,17 +187,17 @@ function WaitingForPartner({ code }: { code: string }) {
             name={m.displayName}
             color={memberColor(m.colorKey)}
             online={m.online}
-            size={44}
+            size={48}
           />
         ))}
-        <View style={styles.avatarPlaceholder} />
+        <View style={styles.avatarPlaceholder} accessibilityLabel="Your partner's place" />
+        <Text style={styles.waitingText}>Waiting for your partner…</Text>
       </View>
-      <Caption>Waiting for your partner…</Caption>
 
-      <Caption>
-        Branches plans for two, so the shared baseline needs both of you before it can be
-        built. Nothing is lost while you wait — the code stays the same.
-      </Caption>
+      <Body dim>
+        Branches plans for two, so the shared baseline needs both of you before it can be built.
+        Nothing is lost while you wait; the code stays the same.
+      </Body>
 
       {/*
         The documented way to get a second identity on one machine
@@ -169,10 +206,10 @@ function WaitingForPartner({ code }: { code: string }) {
         person.
       */}
       {Platform.OS === 'web' ? (
-        <Caption>
-          Testing alone? Open a second tab at /?device=b and enter {code} there — that tab
-          gets its own identity.
-        </Caption>
+        <Notice>
+          Testing alone? Open a second tab at /?device=b and enter {code} there. That tab gets its
+          own identity.
+        </Notice>
       ) : null}
 
       <SectionHeader>Fix your name</SectionHeader>
@@ -180,6 +217,7 @@ function WaitingForPartner({ code }: { code: string }) {
         value={rename}
         onChangeText={setRename}
         placeholder={me?.displayName ?? 'Your name'}
+        label="New name"
       />
       <Button
         label="Update name"
@@ -195,7 +233,7 @@ function WaitingForPartner({ code }: { code: string }) {
           }
         }}
       />
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
     </Screen>
   );
 }
@@ -207,15 +245,37 @@ function messageOf(error: unknown): string {
 }
 
 const styles = StyleSheet.create({
-  header: { marginTop: space.xl, marginBottom: space.xl },
-  actions: { gap: space.xs },
-  avatars: { flexDirection: 'row', gap: space.sm, marginTop: space.xl, marginBottom: space.sm },
-  avatarPlaceholder: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderStyle: 'dashed',
+  canopy: { marginHorizontal: -space.sidePadding },
+  wordmarkWrap: { paddingHorizontal: space.sidePadding },
+  plate: { ...typeScale.plate, color: colors.accent, marginBottom: space.xs },
+  wordmark: { fontFamily: fonts.numeral, fontSize: 48, lineHeight: 54, letterSpacing: -1, color: colors.ink },
+  pitch: { ...typeScale.bodyItalic, fontSize: 20, lineHeight: 29, color: colors.ink, marginTop: space.xl },
+  fork: { marginTop: space.lg, marginBottom: space.md, marginRight: -space.sidePadding },
+  actions: { marginTop: space.sm },
+  label: { ...typeScale.label, color: colors.ink },
+
+  code: {
+    fontFamily: fonts.numeral,
+    fontSize: 56,
+    lineHeight: 64,
+    letterSpacing: 10,
+    color: colors.ink,
   },
+  avatars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.lg,
+    marginBottom: space.lg,
+  },
+  avatarPlaceholder: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: line.path,
+    borderColor: colors.memberB,
+    borderStyle: 'dashed',
+    opacity: 0.6,
+  },
+  waitingText: { ...typeScale.bodyItalic, color: colors.ink2, marginLeft: space.sm, flexShrink: 1 },
 });

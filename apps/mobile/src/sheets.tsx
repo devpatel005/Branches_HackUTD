@@ -1,15 +1,27 @@
-import type { ReactNode } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState, type ReactNode } from 'react';
+import {
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { ProvenanceRecord } from '@branches/engine';
-import { Button, Caption, Headline, Row, SectionHeader } from './components';
-import { colors, space, tabularNums, type as typeScale } from './theme';
+import { Button, Caption, Row, SectionHeader } from './components';
+import { FernLeaf } from './forest';
+import { COLUMN_MAX_WIDTH, colors, fonts, line, radius, space, tabularNums, type as typeScale } from './theme';
 
 /**
  * Bottom sheets — 10 Screens#Sheets.
  *
  * `Modal` rather than a gesture-driven sheet library: it works identically in
- * Expo Go and on web with no native module (02 Ground Rules #6). Stage 8 can
- * make it slide.
+ * Expo Go and on web with no native module (02 Ground Rules #6). The sheet
+ * rises over a dimmed page, clears the home indicator, lifts with the keyboard
+ * on iOS, and on web keeps to the phone column's width.
  */
 
 export function Sheet({
@@ -23,35 +35,53 @@ export function Sheet({
   title: string;
   children: ReactNode;
 }) {
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose} />
-      <View style={styles.sheet}>
-        <View style={styles.handle} />
-        <Headline>{title}</Headline>
-        <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
-          {children}
-        </ScrollView>
-        <Button label="Close" variant="secondary" onPress={onClose} />
-      </View>
+      <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close" />
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.dock}
+        pointerEvents="box-none"
+      >
+        <View style={[styles.sheet, { paddingBottom: space.lg + insets.bottom }]}>
+          <FernLeaf size={150} angle={-200} opacity={0.28} style={styles.leaf} />
+          <View style={styles.handle} />
+          <Text style={styles.title} accessibilityRole="header">
+            {title}
+          </Text>
+          <ScrollView
+            style={styles.body}
+            contentContainerStyle={styles.bodyContent}
+            keyboardShouldPersistTaps="handled"
+          >
+            {children}
+          </ScrollView>
+          <Button label="Close" variant="secondary" onPress={onClose} />
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
-/** Formats a provenance input for display without doing arithmetic on it. */
-function formatInput(value: number | string | readonly number[]): string {
+/**
+ * Formats a provenance input for display without doing arithmetic on it.
+ * Provenance inputs are deliberately unrounded so the arithmetic re-walks; by
+ * default they are shown to the cent (what a person reads), and "exact values"
+ * shows the six places the engine actually used.
+ */
+function formatInput(value: number | string | readonly number[], exact: boolean): string {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) {
-    return value.map(v => (typeof v === 'number' ? round(v) : String(v))).join(', ');
+    return value.map(v => (typeof v === 'number' ? round(v, exact) : String(v))).join(', ');
   }
-  return round(value as number);
+  return round(value as number, exact);
 }
 
-function round(value: number): string {
-  if (Number.isInteger(value)) return String(value);
-  // Provenance inputs are deliberately unrounded so the arithmetic re-walks;
-  // six places is enough to show that without filling the screen.
-  return value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+function round(value: number, exact: boolean): string {
+  if (Number.isInteger(value)) return value.toLocaleString('en-US');
+  if (exact) return value.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
+  return value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 const ASSUMPTION_LABELS: Record<string, string> = {
@@ -80,6 +110,7 @@ export function ShowTheMath({
   label: string;
   record: ProvenanceRecord | undefined;
 }) {
+  const [exact, setExact] = useState(false);
   return (
     <Sheet visible={visible} onClose={onClose} title={label}>
       {!record ? (
@@ -91,8 +122,18 @@ export function ShowTheMath({
 
           <SectionHeader>What goes into it</SectionHeader>
           {Object.entries(record.inputs).map(([key, value]) => (
-            <Row key={key} label={humanize(key)} value={formatInput(value)} />
+            <Row key={key} label={humanize(key)} value={formatInput(value, exact)} />
           ))}
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: exact }}
+            onPress={() => setExact(v => !v)}
+            style={styles.exactToggle}
+          >
+            <Text style={styles.exactText}>
+              {exact ? 'Show rounded values' : 'Show exact values'}
+            </Text>
+          </Pressable>
 
           {Object.keys(record.assumptions).length > 0 ? (
             <>
@@ -109,8 +150,14 @@ export function ShowTheMath({
           ) : null}
 
           <SectionHeader>Result</SectionHeader>
-          <Text style={[styles.result, tabularNums]}>{record.result.toLocaleString('en-US')}</Text>
-          <Caption>Formula reference: {record.formula}</Caption>
+          <Text style={[styles.result, tabularNums]}>
+            {exact
+              ? record.result.toLocaleString('en-US', { maximumFractionDigits: 6 })
+              : record.result.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+          </Text>
+          <View style={styles.formulaRef}>
+            <Text style={styles.formulaText}>Formula {record.formula}</Text>
+          </View>
         </>
       )}
     </Sheet>
@@ -124,29 +171,37 @@ function humanize(key: string): string {
 }
 
 const styles = StyleSheet.create({
-  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.6)' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(4, 12, 12, 0.72)' },
+  dock: { flex: 1, justifyContent: 'flex-end', alignItems: 'center' },
   sheet: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    maxHeight: '85%',
+    width: '100%',
+    maxWidth: COLUMN_MAX_WIDTH,
+    maxHeight: '88%',
     backgroundColor: colors.surface,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    padding: space.sidePadding,
-    paddingBottom: space.xl,
+    borderTopLeftRadius: radius,
+    borderTopRightRadius: radius,
+    borderTopWidth: line.hair,
+    borderColor: colors.ruleStrong,
+    paddingHorizontal: space.sidePadding,
+    paddingTop: space.md,
+    overflow: 'hidden',
   },
+  leaf: { position: 'absolute', right: -56, top: -30 },
   handle: {
     alignSelf: 'center',
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.hairline,
-    marginBottom: space.md,
+    backgroundColor: colors.ruleStrong,
+    marginBottom: space.lg,
   },
-  body: { marginTop: space.sm },
-  bodyContent: { paddingBottom: space.md },
-  prose: { ...typeScale.body, color: colors.textPrimary, lineHeight: 22, marginTop: space.xs },
-  result: { ...typeScale.title, color: colors.textPrimary, marginVertical: space.sm },
+  title: { ...typeScale.title, fontSize: 26, lineHeight: 32, color: colors.ink, maxWidth: '85%' },
+  body: { marginTop: space.xs, flexShrink: 1 },
+  bodyContent: { paddingBottom: space.lg },
+  prose: { ...typeScale.bodyItalic, color: colors.ink, marginTop: space.xs },
+  exactToggle: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' },
+  exactText: { ...typeScale.label, color: colors.accent, textDecorationLine: 'underline' },
+  result: { ...typeScale.display, color: colors.ink, marginVertical: space.sm },
+  formulaRef: { borderLeftWidth: 2, borderLeftColor: colors.ruleStrong, paddingLeft: space.md },
+  formulaText: { fontFamily: fonts.textMedium, fontSize: 13, color: colors.ink2 },
 });

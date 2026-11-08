@@ -1,20 +1,12 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
-import {
-  Body,
-  Button,
-  Caption,
-  Chip,
-  Notice,
-  ProgressPill,
-  Screen,
-  Title,
-} from '../../src/components';
+import { Body, Button, Notice, ProgressPill, Screen, TitleBand } from '../../src/components';
+import { Icon } from '../../src/icons';
 import { memberColor, useMyGaps, useProgress } from '../../src/household';
-import { space } from '../../src/theme';
+import { colors, fonts, line, space } from '../../src/theme';
 
 /**
  * "Fill the gaps" — 10 Screens#Onboarding, step 2.
@@ -39,13 +31,14 @@ export default function GapsScreen() {
   if (!current) {
     return (
       <Screen>
-        <Title>Nothing left to ask</Title>
-        <Body dim>
-          {gaps.length > 0
-            ? 'Thanks — that was everything the data could not tell us.'
-            : 'We found everything we needed in your transactions.'}
-        </Body>
-        <Button label="Next" onPress={() => router.push('/onboarding/fun-money')} />
+        <TitleBand plate="Step 2 of 4" title="Nothing left to ask." onBack={() => router.back()}>
+          <Body dim>
+            {gaps.length > 0
+              ? 'Thanks. That was everything the data could not tell us.'
+              : 'We found everything we needed in your transactions.'}
+          </Body>
+        </TitleBand>
+        <Button label="Continue to fun money" onPress={() => router.push('/onboarding/fun-money')} />
       </Screen>
     );
   }
@@ -54,16 +47,19 @@ export default function GapsScreen() {
 
   return (
     <Screen>
-      <Caption>
-        Question {answered + 1} of {gaps.length}
-      </Caption>
-      <Title>{current.prompt}</Title>
+      <TitleBand
+        plate={`Step 2 of 4 · Question ${answered + 1} of ${gaps.length}`}
+        title={current.prompt}
+        onBack={() => router.back()}
+      />
 
-      <View style={styles.chips}>
+      {/* One question per screen; each answer is a full-width row, easy to hit
+          with a thumb, and choosing one moves straight on. */}
+      <View style={styles.answers}>
         {current.options.map(option => (
-          <Chip
+          <Pressable
             key={option}
-            label={option}
+            accessibilityRole="button"
             onPress={async () => {
               setError(null);
               try {
@@ -72,11 +68,15 @@ export default function GapsScreen() {
                 setError(messageOf(e));
               }
             }}
-          />
+            style={({ pressed }) => [styles.answer, pressed && { backgroundColor: colors.surface }]}
+          >
+            <Text style={styles.answerText}>{option}</Text>
+            <Icon name="forward" size={20} color={colors.ink2} />
+          </Pressable>
         ))}
       </View>
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
 
       <View style={styles.progressRow}>
         {progress.partners.map(p => (
@@ -92,8 +92,8 @@ export default function GapsScreen() {
       </View>
 
       <Notice>
-        Money you've set aside for retirement stays out of the plan's goals — we just need to
-        know which transfers are which.
+        Money you've set aside for retirement stays out of the plan's goals. We just need to know
+        which transfers are which.
       </Notice>
     </Screen>
   );
@@ -105,6 +105,17 @@ function messageOf(error: unknown): string {
 }
 
 const styles = StyleSheet.create({
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.lg },
-  progressRow: { flexDirection: 'row', gap: space.md, marginTop: space.xl, flexWrap: 'wrap' },
+  answers: { borderTopWidth: line.hair, borderTopColor: colors.rule },
+  answer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 60,
+    paddingVertical: space.md,
+    borderBottomWidth: line.hair,
+    borderBottomColor: colors.rule,
+    gap: space.md,
+  },
+  answerText: { fontFamily: fonts.textMedium, fontSize: 17, lineHeight: 24, color: colors.ink, flex: 1 },
+  progressRow: { flexDirection: 'row', gap: space.lg, marginTop: space.xl, flexWrap: 'wrap' },
 });
