@@ -1,34 +1,21 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import {
-  Body,
-  Button,
-  Caption,
-  Loading,
-  Notice,
-  Row,
-  Screen,
-  Title,
-} from '../../src/components';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Body, Button, Loading, Screen, TitleBand } from '../../src/components';
+import { Station } from '../../src/forest';
 import { AddGoalSheet } from '../../src/goal-picker';
 import { GoalDetailSheet } from '../../src/plan-sheets';
 import { Pulse } from '../../src/pulse';
 import { memberColor, useHousehold, useHouseholdMembers, useMe } from '../../src/household';
 import { goalResult, planMonthLabel, useGoals, useProjection } from '../../src/projection';
-import { dollars, perMonth } from '../../src/format';
-import { colors, space, tabularNums, type as typeScale } from '../../src/theme';
+import { dollars } from '../../src/format';
+import { colors, line, space, tabularNums, type as typeScale } from '../../src/theme';
 
 const PLAN_YEARS = 10;
 
 /**
- * Timeline — 10 Screens#Timeline.
- *
- * Vertical scroll by plan year, goals shown at their target month, applied life
- * events as markers (Stage 4), and **tight years tinted** with the caution
- * token — the only place that colour is used (09 Design System).
- *
- * This is also where goals are added after onboarding: 10 Screens puts the
- * picker in onboarding only, which would leave goals frozen afterwards.
+ * Timeline — the ten years drawn as one path with a stop per year
+ * (10 Screens#Timeline). Goals sit at the year they settle; a tight year gets a
+ * flat lichen band, never a box.
  */
 export default function TimelineScreen() {
   const { me } = useMe();
@@ -40,88 +27,91 @@ export default function TimelineScreen() {
   const [addOpen, setAddOpen] = useState(false);
   const [openGoalId, setOpenGoalId] = useState<bigint | null>(null);
 
-  if (!household) return <Loading label="Connecting…" />;
+  if (!household) return <Loading label="Finding your household…" />;
 
   const actor =
     lastChangedBy !== undefined && lastChangedBy !== me?.id
       ? members.find(m => m.id === lastChangedBy)
       : undefined;
   const pulseColor = actor ? memberColor(actor.colorKey) : undefined;
-
   const tightYears = new Set(projection?.tightYears ?? []);
+  const firstYear = Number(household.currentMonth.slice(0, 4));
+  // A plan year starts at plan month 0, so unless that is January it spans two
+  // calendar years ("2027–28"); a single year would contradict the goal dates.
+  const startsInJanuary = household.currentMonth.slice(5, 7) === '01';
+  const yearLabel = (year: number) => {
+    const y = firstYear + year - 1;
+    return startsInJanuary ? String(y) : `${y}–${String(y + 1).slice(2)}`;
+  };
 
   return (
     <Screen>
-      <Title>Ten years</Title>
-      <Body dim>
-        Every goal at the month it's due. Tap one to see its math or change it.
-      </Body>
+      <TitleBand plate="No. 2 · Timeline" title="Your ten years">
+        <Body dim>
+          Every goal sits at the month it settles. A lichen band marks a tight year.
+        </Body>
+      </TitleBand>
 
-      <Button label="Add a goal" onPress={() => setAddOpen(true)} />
+      <Button label="Add a goal" variant="secondary" icon="plus" onPress={() => setAddOpen(true)} />
 
       {goals.length === 0 && ready ? (
-        <Notice>
-          No goals yet. Add a few — a house, a trip, a car — and the ten-year projection fills in.
-        </Notice>
+        <Text style={styles.emptyLine}>Your timeline fills in as you add goals.</Text>
       ) : null}
 
-      <Pulse watch={version} color={pulseColor} style={styles.years}>
+      <Pulse watch={version} color={pulseColor} style={styles.path}>
+        <View style={styles.spine} />
         {Array.from({ length: PLAN_YEARS }, (_, i) => i + 1).map(year => {
-          const yearGoals = goals.filter(
-            g => Math.floor((g.targetMonth - 1) / 12) + 1 === year
-          );
-          const isTight = tightYears.has(year);
-          const calendarYear = Number(household.currentMonth.slice(0, 4)) + (year - 1);
-
+          const yearGoals = goals.filter(g => Math.floor((g.targetMonth - 1) / 12) + 1 === year);
+          const tight = tightYears.has(year);
           return (
-            <View key={year} style={[styles.year, isTight && styles.yearTight]}>
-              <View style={styles.yearHeader}>
-                <Text style={styles.yearLabel}>
-                  Year {year} <Text style={styles.calendarYear}>· {calendarYear}</Text>
-                </Text>
-                {isTight ? <Text style={styles.tightBadge}>tight</Text> : null}
+            <View key={year} style={[styles.year, tight && styles.yearTight]}>
+              <View style={styles.yearHead}>
+                <View style={styles.stop}>
+                  <Station color={tight ? colors.warn : colors.ruleStrong} size={9} />
+                </View>
+                <Text style={[styles.calendarYear, tabularNums]}>{yearLabel(year)}</Text>
+                <Text style={styles.yearIndex}>Year {year}</Text>
+                {tight ? <Text style={styles.tightLabel}>Tight year</Text> : null}
               </View>
 
-              {yearGoals.length === 0 ? (
-                <Text style={styles.empty}>—</Text>
-              ) : (
-                yearGoals.map(goal => {
-                  const result = goalResult(projection, goal.id);
-                  return (
-                    <Row
-                      key={String(goal.id)}
-                      label={`${goal.icon} ${goal.title}`}
-                      sublabel={`${planMonthLabel(household.currentMonth, goal.targetMonth)} · ${
-                        goal.priority === 'must' ? 'must-have' : 'flexible'
-                      } · ${dollars(goal.costTodayCents)} today`}
-                      value={result ? perMonth(Math.round(result.requiredMonthlyAtStart * 100)) : '—'}
-                      onPress={() => setOpenGoalId(goal.id)}
-                      right={
-                        <View
-                          style={[
-                            styles.statusDot,
-                            {
-                              backgroundColor:
-                                result?.funded === false ? colors.negative : colors.accent,
-                            },
-                          ]}
-                        />
-                      }
-                    />
-                  );
-                })
-              )}
+              {yearGoals.map(goal => {
+                const result = goalResult(projection, goal.id);
+                const funded = result?.funded !== false;
+                const monthly = result
+                  ? dollars(Math.round(result.requiredMonthlyAtStart * 100), { showCents: true })
+                  : '—';
+                const when = planMonthLabel(household.currentMonth, goal.targetMonth);
+                return (
+                  <Pressable
+                    key={String(goal.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${goal.title}, ${when}, ${funded ? 'funded' : "doesn't fit yet"}. ${monthly} a month. Open details.`}
+                    onPress={() => setOpenGoalId(goal.id)}
+                    style={({ pressed }) => [styles.goal, pressed && styles.pressed]}
+                  >
+                    <View style={styles.stop}>
+                      <Station color={funded ? colors.accent : colors.error} filled={!funded} />
+                    </View>
+                    <View style={styles.goalText}>
+                      <Text style={styles.goalTitle} numberOfLines={2}>
+                        {goal.title}
+                      </Text>
+                      <Text style={styles.goalMeta}>
+                        {when} · {dollars(goal.costTodayCents)} today ·{' '}
+                        {goal.priority === 'must' ? 'Must-have' : 'Flexible'}
+                      </Text>
+                    </View>
+                    <View style={styles.goalAmount}>
+                      <Text style={[styles.goalMonthly, tabularNums]}>{monthly}</Text>
+                      <Text style={styles.goalUnit}>a month</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
             </View>
           );
         })}
       </Pulse>
-
-      {tightYears.size > 0 ? (
-        <Caption color={colors.caution}>
-          A tinted year has at least one month where the emergency fund dips below its floor, or a
-          goal couldn't be paid in full.
-        </Caption>
-      ) : null}
 
       <AddGoalSheet visible={addOpen} onClose={() => setAddOpen(false)} />
       <GoalDetailSheet goalId={openGoalId} onClose={() => setOpenGoalId(null)} />
@@ -129,20 +119,35 @@ export default function TimelineScreen() {
   );
 }
 
+const GUTTER = 22;
+
 const styles = StyleSheet.create({
-  years: { marginTop: space.lg },
-  year: { paddingVertical: space.sm, borderRadius: 8, paddingHorizontal: space.sm },
-  // Tight years are tinted, not outlined, so the whole band reads as the signal.
-  yearTight: { backgroundColor: 'rgba(255, 184, 0, 0.08)' },
-  yearHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: space.xs,
+  emptyLine: { ...typeScale.bodyItalic, color: colors.ink2, marginTop: space.lg },
+  pressed: { backgroundColor: colors.surface },
+
+  path: { marginTop: space.xxl, position: 'relative' },
+  spine: {
+    position: 'absolute',
+    left: GUTTER / 2 - line.path / 2,
+    top: 14,
+    bottom: 14,
+    width: line.path,
+    backgroundColor: colors.ruleStrong,
   },
-  yearLabel: { ...typeScale.caption, color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.6 },
-  calendarYear: { ...tabularNums, textTransform: 'none', letterSpacing: 0 },
-  tightBadge: { ...typeScale.caption, color: colors.caution },
-  empty: { ...typeScale.body, color: colors.hairline, paddingVertical: space.sm },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
+
+  year: { paddingVertical: space.md, borderBottomWidth: line.hair, borderBottomColor: colors.rule },
+  yearTight: { backgroundColor: colors.warnBand },
+  yearHead: { flexDirection: 'row', alignItems: 'baseline', gap: space.sm, minHeight: 32 },
+  stop: { width: GUTTER, alignItems: 'center', alignSelf: 'center' },
+  calendarYear: { ...typeScale.title, fontSize: 24, lineHeight: 30, color: colors.ink },
+  yearIndex: { ...typeScale.caption, color: colors.ink2 },
+  tightLabel: { ...typeScale.caption, color: colors.warn, marginLeft: 'auto', paddingRight: space.sm },
+
+  goal: { flexDirection: 'row', alignItems: 'center', gap: space.sm, minHeight: 64, paddingVertical: space.sm },
+  goalText: { flex: 1 },
+  goalTitle: { ...typeScale.headline, fontSize: 17, color: colors.ink },
+  goalMeta: { ...typeScale.caption, color: colors.ink2, marginTop: 2 },
+  goalAmount: { alignItems: 'flex-end', paddingRight: space.xs },
+  goalMonthly: { ...typeScale.numeral, fontSize: 18, color: colors.ink },
+  goalUnit: { ...typeScale.caption, color: colors.ink2 },
 });

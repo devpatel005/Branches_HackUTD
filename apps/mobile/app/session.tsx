@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
@@ -16,8 +16,10 @@ import {
   Row,
   Screen,
   SectionHeader,
-  Title,
+  TitleBand,
 } from '../src/components';
+import { BranchPaths, type Lane } from '../src/forest';
+import { Icon, REACTION_ICON } from '../src/icons';
 import { Sheet } from '../src/sheets';
 import { ReadyRing, type RingMember } from '../src/ready-ring';
 import {
@@ -36,7 +38,7 @@ import { useActiveEvent, useAgentActivity, useImpact } from '../src/events';
 import { memberColor, useHouseholdMembers, useMe } from '../src/household';
 import { useGoals } from '../src/projection';
 import { dollars } from '../src/format';
-import { colors, space, tabularNums, type as typeScale } from '../src/theme';
+import { breakpoints, colors, fonts, line, radius, space, tabularNums, type as typeScale } from '../src/theme';
 
 /**
  * The live planning session — 10 Screens#Session, 08 Live Session Spec.
@@ -62,6 +64,8 @@ export default function SessionScreen() {
   const reactions = useReactions(session?.id);
   const { goals } = useGoals();
   const agent = useAgentActivity();
+  const { width } = useWindowDimensions();
+  const wide = width >= breakpoints.laptop;
 
   const generateCandidates = useReducer(reducers.generateCandidates);
   const reroll = useReducer(reducers.reroll);
@@ -116,8 +120,9 @@ export default function SessionScreen() {
   if (!session) {
     return (
       <Screen>
-        <Title>No session open</Title>
-        <Body dim>Start one from an impact card in Chat.</Body>
+        <TitleBand plate="Planning session" title="No session open">
+          <Body dim>Start one from an impact card in Chat, after you tell us what happened.</Body>
+        </TitleBand>
         <Button label="Back to Chat" onPress={() => router.replace('/chat')} />
       </Screen>
     );
@@ -161,11 +166,13 @@ export default function SessionScreen() {
     const chosen = branches.find(b => b.id === session.committedBranchId);
     return (
       <Screen>
-        <Title>This is your plan now</Title>
+        <TitleBand plate="Planning session · Done" title="This is your plan now.">
+          <BranchPaths lanes={[{ color: colors.accent, chosen: true }]} merged height={40} />
+        </TitleBand>
         {chosen ? (
           <>
-            <Body>{chosen.name}</Body>
-            <Caption>{chosen.summary}</Caption>
+            <Text style={styles.cardName}>{chosen.name}</Text>
+            <Text style={styles.cardSummary}>{chosen.summary}</Text>
             <SectionHeader>What it does</SectionHeader>
             {branchStatLine(chosen.stats, titleOf).map(part => (
               <Row key={part} label={part} />
@@ -179,61 +186,78 @@ export default function SessionScreen() {
     );
   }
 
-  return (
-    <Screen>
-      {/* Presence header: avatars in member colours, absent ones dimmed. */}
-      <View style={styles.header}>
-        <View style={styles.avatars}>
-          {participants.map(p => (
-            <View key={String(p.member.id)} style={styles.presenceItem}>
-              <Avatar
-                name={p.member.displayName}
-                color={memberColor(p.member.colorKey)}
-                online={p.state.present}
-                size={30}
-              />
-              {p.state.ready ? <Text style={styles.readyPip}>✓</Text> : null}
-            </View>
-          ))}
-          {agent.running ? <Text style={styles.agentPip}>◇</Text> : null}
-        </View>
-        <Pressable
-          onPress={() =>
-            run(async () => {
-              await leaveSession({ sessionId: session.id });
-              router.replace('/chat');
-            })
-          }
-        >
-          <Caption>Close</Caption>
-        </Pressable>
-      </View>
+  // One lane per branch card, coloured by who picked it (both = accent).
+  const lanes: Lane[] = branches.map(b => {
+    const pickers = participants.filter(p => p.state.selectedBranchId === b.id);
+    if (pickers.length > 1) return { color: colors.accent, chosen: true };
+    if (pickers.length === 1) return { color: memberColor(pickers[0]!.member.colorKey), chosen: true };
+    return { color: colors.ink3 };
+  });
 
-      <Title>Paths forward</Title>
-      {impact ? (
-        <Body dim>
-          {impact.noImpact
-            ? 'Nothing is at risk — you can keep the plan as it is.'
-            : `${impact.newlyAtRiskGoalIds.map(titleOf).join(' and ')} stopped fitting. Here's what would make it work.`}
-        </Body>
-      ) : null}
+  return (
+    <Screen wide={wide}>
+      <TitleBand
+        plate="Planning session"
+        title="Paths forward"
+        top={
+          <>
+            {/* Presence header: avatars in member colours, absent ones dimmed. */}
+            <View style={styles.header}>
+              <View style={styles.avatars}>
+                {participants.map(p => (
+                  <View key={String(p.member.id)} style={styles.presenceItem}>
+                    <Avatar
+                      name={p.member.displayName}
+                      color={memberColor(p.member.colorKey)}
+                      online={p.state.present}
+                      size={30}
+                    />
+                    {p.state.ready ? <Icon name="check" size={16} color={colors.accent} /> : null}
+                  </View>
+                ))}
+                {agent.running ? <View style={styles.agentDot} accessibilityLabel="Assistant is working" /> : null}
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Leave session"
+                style={({ pressed }) => [styles.leave, pressed && { backgroundColor: colors.surfaceHover }]}
+                onPress={() =>
+                  run(async () => {
+                    await leaveSession({ sessionId: session.id });
+                    router.replace('/chat');
+                  })
+                }
+              >
+                <Icon name="close" size={18} color={colors.ink2} />
+                <Text style={styles.leaveText}>Leave</Text>
+              </Pressable>
+            </View>
+          </>
+        }
+      >
+        {impact ? (
+          <Body dim>
+            {impact.noImpact
+              ? 'Nothing is at risk. You can keep the plan as it is.'
+              : `${impact.newlyAtRiskGoalIds.map(titleOf).join(' and ')} stopped fitting. Here are the paths that make it work.`}
+          </Body>
+        ) : null}
+      </TitleBand>
 
       {agent.progressText ? (
         <View style={styles.progressRow}>
-          <Text style={styles.agentPip}>◇</Text>
-          <Caption>{agent.progressText}</Caption>
+          <View style={styles.agentDot} />
+          <Text style={styles.progressText}>{agent.progressText}</Text>
         </View>
       ) : null}
 
-      {/*
-        The cards below carry engine template names whether or not the agent
-        ever answers, so a quiet assistant costs the naming and nothing else.
-        Saying so is what stops it reading as a frozen screen.
-      */}
+      {/* The cards carry engine template names whether or not the assistant ever
+          answers, so a quiet assistant costs the naming and nothing else.
+          Saying so stops it reading as a frozen screen (verify:screens S4). */}
       {agent.stalled ? (
         <Notice tone="warn">
-          The assistant has been quiet for {agent.quietSeconds} seconds. The paths below are
-          the engine's own and are safe to choose — only their names would have changed.
+          The assistant has been quiet for {agent.quietSeconds} seconds. The paths below are the
+          engine's own and are safe to choose. Only their names would have changed.
         </Notice>
       ) : null}
 
@@ -251,7 +275,8 @@ export default function SessionScreen() {
             {locks.map(lock => (
               <Chip
                 key={String(lock.id)}
-                label={`🔒 ${constraintLabel(lock.target, titleOf)}`}
+                icon="lock"
+                label={constraintLabel(lock.target, titleOf)}
                 selected
                 tint={colourOf(lock.memberId)}
                 onPress={() => run(() => removeConstraint({ constraintId: lock.id }))}
@@ -268,7 +293,8 @@ export default function SessionScreen() {
             {pins.map(pin => (
               <Chip
                 key={String(pin.id)}
-                label={`📌 ${constraintLabel(pin.target, titleOf)} · ${nameOf(pin.memberId)}`}
+                icon="pin"
+                label={`${constraintLabel(pin.target, titleOf)} · ${nameOf(pin.memberId)}`}
                 selected
                 tint={colourOf(pin.memberId)}
                 onPress={
@@ -289,20 +315,16 @@ export default function SessionScreen() {
         </>
       ) : null}
 
-      <SectionHeader>{branches.length === 0 ? 'Working it out' : 'Pick one'}</SectionHeader>
+      <SectionHeader>{branches.length === 0 ? 'Working it out' : 'Pick one together'}</SectionHeader>
       {branches.length === 0 ? (
-        <>
-          <Caption>Looking for paths forward…</Caption>
-          {/*
-            Never-stuck (Stage 8). Branch cards normally arrive with engine
-            template names the moment candidates are generated, so an empty list
-            means generation itself produced nothing or never ran. Neither
-            resolves by waiting, and this was the one screen where waiting was
-            the only thing on offer.
-          */}
+        <View>
+          <BranchPaths lanes={[{ color: colors.ink3 }, { color: colors.ink3 }, { color: colors.ink3 }]} />
+          <Text style={styles.waitingText}>Looking for paths forward…</Text>
+          {/* Never-stuck (verify:screens S6): an empty list never resolves by
+              waiting, so offer a retry and a way out. */}
           <Notice tone="warn">
-            No paths yet. Try again, or go back and adjust what's locked — the engine needs
-            at least one path that fits every constraint.
+            No paths yet. Try again, or go back and loosen what's locked. The engine needs at
+            least one path that fits every lock.
           </Notice>
           <Button
             label="Try again"
@@ -316,11 +338,16 @@ export default function SessionScreen() {
             disabled={busy}
           />
           <Button label="Back to Chat" variant="quiet" onPress={() => router.replace('/chat')} />
-        </>
+        </View>
       ) : (
-        branches.map(branch => (
+        <>
+          <BranchPaths lanes={lanes} />
+          <View style={wide ? styles.cardsWide : undefined}>
+            {branches.map(branch => (
           <BranchCard
             key={String(branch.id)}
+            index={branches.indexOf(branch)}
+            wide={wide}
             branch={branch}
             selectedBy={participants.filter(p => p.state.selectedBranchId === branch.id)}
             reactions={reactions.get(String(branch.id)) ?? []}
@@ -345,15 +372,18 @@ export default function SessionScreen() {
               )
             }
           />
-        ))
+            ))}
+          </View>
+        </>
       )}
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
 
       <View style={styles.actions}>
         <Button
           label="Show me other paths"
           variant="secondary"
+          icon="leaf"
           onPress={() =>
             run(async () => {
               await reroll({ sessionId: session.id });
@@ -412,7 +442,7 @@ export default function SessionScreen() {
           <SectionHeader>Make it the plan</SectionHeader>
           <Notice>
             {check.reason
-              ? `Not yet — ${check.reason}.`
+              ? `Not yet: ${check.reason}.`
               : 'Pick a path to see the hold-to-confirm control.'}
           </Notice>
           {soloMode && myState?.selectedBranchId !== undefined ? (
@@ -452,6 +482,8 @@ export default function SessionScreen() {
 
 /** A branch card — the thing you choose, so the one place cards are used. */
 function BranchCard({
+  index,
+  wide,
   branch,
   selectedBy,
   reactions,
@@ -464,6 +496,8 @@ function BranchCard({
   onOpen,
   onLock,
 }: {
+  index: number;
+  wide: boolean;
   branch: BranchView;
   selectedBy: { member: { id: bigint; displayName: string; colorKey: string }; state: { present: boolean } }[];
   reactions: { memberId: bigint; emoji: string }[];
@@ -482,32 +516,48 @@ function BranchCard({
     goalId,
   }));
 
-  // Both partners on one card: split the border between their colours by
-  // showing the first and tinting the background (09 Design System).
-  const borderColour =
-    selectedBy.length === 0 ? 'transparent' : memberColor(selectedBy[0]!.member.colorKey);
+  // Selected: a 2px border in the picker's colour. Both partners on one card:
+  // top/left in the first colour, bottom/right in the second (09 Design System).
+  const first = selectedBy[0] ? memberColor(selectedBy[0].member.colorKey) : undefined;
+  const second = selectedBy[1] ? memberColor(selectedBy[1].member.colorKey) : first;
+  const selectedStyle = first
+    ? {
+        backgroundColor: colors.surfaceRaised,
+        borderTopColor: first,
+        borderLeftColor: first,
+        borderBottomColor: second,
+        borderRightColor: second,
+      }
+    : null;
 
   return (
     <Pressable
       onPress={onSelect}
+      // No button role: the card holds its own buttons (reactions, adjust, lock),
+      // and a button inside a button is invalid on web.
+      accessibilityLabel={`Path ${index + 1}: ${branch.name}. ${branch.summary}. Tap to pick it.`}
       style={({ pressed }) => [
         styles.card,
-        selectedBy.length > 0 && { backgroundColor: colors.surfaceRaised, borderColor: borderColour },
-        pressed && { opacity: 0.8 },
+        wide && styles.cardWide,
+        selectedStyle,
+        pressed && { backgroundColor: colors.surfaceHover },
       ]}
     >
       <View style={styles.cardHead}>
-        <Text style={styles.cardName}>{branch.name}</Text>
-        {branch.source === 'bridge' ? <Caption>bridge</Caption> : null}
+        <Text style={styles.cardPlate}>
+          Path {index + 1}
+          {branch.source === 'bridge' ? ' · bridge' : ''}
+        </Text>
         {branch.tunedBy !== undefined ? (
           <Caption color={colourOf(branch.tunedBy)}>Tuned by {nameOf(branch.tunedBy)}</Caption>
         ) : null}
       </View>
+      <Text style={styles.cardName}>{branch.name}</Text>
       <Text style={styles.cardSummary}>{branch.summary}</Text>
 
-      <View style={styles.statChips}>
+      <View style={styles.statList}>
         {branchStatLine(branch.stats, titleOf).map(part => (
-          <Text key={part} style={[styles.statChip, tabularNums]}>
+          <Text key={part} style={styles.statLine}>
             {part}
           </Text>
         ))}
@@ -524,6 +574,7 @@ function BranchCard({
         <View style={styles.pickedBy}>
           {selectedBy.map(p => {
             const emoji = reactions.find(r => r.memberId === p.member.id)?.emoji;
+            const reaction = emoji ? REACTION_ICON[emoji] : undefined;
             return (
               <View key={String(p.member.id)} style={styles.pickedItem}>
                 <Avatar
@@ -532,7 +583,11 @@ function BranchCard({
                   online={p.state.present}
                   size={22}
                 />
-                {emoji ? <Text style={styles.reaction}>{emoji}</Text> : null}
+                {reaction ? (
+                  <View accessibilityLabel={`${p.member.displayName}: ${reaction.label}`}>
+                    <Icon name={reaction.icon} size={18} color={memberColor(p.member.colorKey)} />
+                  </View>
+                ) : null}
               </View>
             );
           })}
@@ -543,16 +598,19 @@ function BranchCard({
         {REACTIONS.map(emoji => (
           <Chip
             key={emoji}
-            label={emoji}
+            label=""
+            icon={REACTION_ICON[emoji]?.icon ?? 'agree'}
+            accessibilityLabel={REACTION_ICON[emoji]?.label ?? 'React'}
             selected={myReaction === emoji}
             onPress={() => onReact(emoji)}
           />
         ))}
-        <Chip label="Adjust" onPress={onOpen} />
+        <Chip label="Adjust" icon="adjust" onPress={onOpen} />
         {lockables.map(target => (
           <Chip
             key={JSON.stringify(target)}
-            label={`🔒 Keep ${titleOf((target as { goalId: string }).goalId)} on time`}
+            icon="lock"
+            label={`Keep ${titleOf((target as { goalId: string }).goalId)} on time`}
             onPress={() => onLock(target)}
           />
         ))}
@@ -672,11 +730,11 @@ function Stepper({
       {label ? <Text style={styles.stepperLabel}>{label}</Text> : null}
       <View style={styles.stepperControls}>
         <Pressable onPress={onDown} style={styles.stepButton} accessibilityLabel={`decrease ${label ?? 'value'}`}>
-          <Text style={styles.stepGlyph}>−</Text>
+          <Icon name="minus" size={20} color={colors.ink} />
         </Pressable>
         <Text style={[styles.stepperValue, tabularNums]}>{value}</Text>
         <Pressable onPress={onUp} style={styles.stepButton} accessibilityLabel={`increase ${label ?? 'value'}`}>
-          <Text style={styles.stepGlyph}>+</Text>
+          <Icon name="plus" size={20} color={colors.ink} />
         </Pressable>
       </View>
     </View>
@@ -710,7 +768,7 @@ function PinSheet({
   return (
     <Sheet visible={visible} onClose={onClose} title="What matters most?">
       <Body dim>
-        Pick the one thing you don't want to move. You get one — and so does your partner.
+        Pick the one thing you don't want to move. You get one, and so does your partner.
       </Body>
       <View style={styles.chipRow}>
         {options.map(option => (
@@ -748,47 +806,66 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    marginTop: -space.lg,
     marginBottom: space.md,
   },
   avatars: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  presenceItem: { flexDirection: 'row', alignItems: 'center' },
-  readyPip: { ...typeScale.caption, color: colors.accent, marginLeft: 2 },
-  agentPip: { ...typeScale.caption, color: colors.agent },
-  progressRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginTop: space.md },
+  presenceItem: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  agentDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.agent },
+  leave: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    minHeight: 44,
+    paddingHorizontal: space.sm,
+    borderRadius: radius,
+  },
+  leaveText: { ...typeScale.label, color: colors.ink2 },
+  progressRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.md },
+  progressText: { ...typeScale.bodyItalic, fontSize: 15, color: colors.ink2 },
+  waitingText: { ...typeScale.bodyItalic, color: colors.ink2, marginTop: space.sm },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },
-  actions: { marginTop: space.md },
+  actions: { marginTop: space.lg },
 
-  // Cards are used only for branches — the thing you choose
-  // (09 Design System#Layout).
+  // Branch cards: the only boxes in the product, because they are the thing
+  // you choose (09 Design System#Layout).
+  cardsWide: { flexDirection: 'row', gap: space.lg, alignItems: 'stretch' },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: 12,
+    borderRadius: radius,
     borderWidth: 2,
-    borderColor: 'transparent',
-    padding: space.md,
-    marginBottom: space.sm,
+    borderColor: colors.rule,
+    padding: space.lg,
+    marginBottom: space.md,
   },
+  cardWide: { flex: 1, marginBottom: 0 },
   cardHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.sm },
-  cardName: { ...typeScale.headline, color: colors.textPrimary, flex: 1 },
-  cardSummary: { ...typeScale.body, color: colors.textSecondary, marginTop: space.xs, lineHeight: 21 },
-  statChips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
-  statChip: { ...typeScale.caption, color: colors.textSecondary },
-  pickedBy: { flexDirection: 'row', gap: space.sm, marginTop: space.md },
-  pickedItem: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  reaction: { fontSize: 14 },
+  cardPlate: { ...typeScale.plate, color: colors.accent },
+  cardName: { ...typeScale.title, fontSize: 24, lineHeight: 30, color: colors.ink, marginTop: space.xs },
+  cardSummary: { ...typeScale.bodyItalic, fontSize: 16, lineHeight: 23, color: colors.ink2, marginTop: space.xs },
+  statList: {
+    marginTop: space.md,
+    borderTopWidth: line.hair,
+    borderTopColor: colors.rule,
+    paddingTop: space.sm,
+    gap: 2,
+  },
+  statLine: { fontFamily: fonts.textMedium, fontSize: 14, lineHeight: 21, color: colors.ink },
+  pickedBy: { flexDirection: 'row', gap: space.md, marginTop: space.md },
+  pickedItem: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   cardActions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
 
   stepper: { marginTop: space.sm },
-  stepperLabel: { ...typeScale.caption, color: colors.textSecondary, marginBottom: space.xs },
+  stepperLabel: { ...typeScale.caption, color: colors.ink2, marginBottom: space.xs },
   stepperControls: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   stepButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.surfaceRaised,
+    width: 44,
+    height: 44,
+    borderWidth: line.hair,
+    borderColor: colors.ruleStrong,
+    borderRadius: radius,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  stepGlyph: { ...typeScale.headline, color: colors.textPrimary },
-  stepperValue: { ...typeScale.body, color: colors.textPrimary, minWidth: 70, textAlign: 'center' },
+  stepperValue: { ...typeScale.numeral, fontSize: 18, color: colors.ink, minWidth: 70, textAlign: 'center' },
 });

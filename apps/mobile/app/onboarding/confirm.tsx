@@ -16,8 +16,9 @@ import {
   Row,
   Screen,
   SectionHeader,
-  Title,
+  TitleBand,
 } from '../../src/components';
+import { Icon, type IconName } from '../../src/icons';
 import {
   memberColor,
   shouldShowLoading,
@@ -28,17 +29,13 @@ import {
 } from '../../src/household';
 import { deviceSlotLabel } from '../../src/device-slot';
 import { KIND_LABELS, KIND_ORDER, perMonth } from '../../src/format';
-import { colors, space, type as typeScale } from '../../src/theme';
+import { colors, fonts, space, radius } from '../../src/theme';
 
 /**
- * "Confirm what we found" — 10 Screens#Onboarding, step 1.
+ * "Confirm what we found" — 10 Screens#Onboarding, step 1 (Washington Evergreen & Ruled Ledger).
  *
- * Mostly tapping: inference already found these from the transactions
- * (06 Engine Spec#Baseline inference), so the member only confirms, edits or
- * rejects. Each partner sees **only their own items** — that is enforced by
- * row-level security in the module, not by this screen (05 Data Model).
- *
- * The partner's progress still shows, from a view that exposes counts only.
+ * Mostly tapping: inference already found these from transactions (06 Engine Spec#Baseline inference),
+ * so the member only confirms, edits or rejects. Each partner sees only their own items (row-level security).
  */
 export default function ConfirmScreen() {
   const router = useRouter();
@@ -75,11 +72,12 @@ export default function ConfirmScreen() {
   if (items.length === 0) {
     return (
       <Screen>
-        <Title>Let's find what you already have</Title>
-        <Body dim>
-          Branches reads your transactions and works out your income, bills and loans, so you
-          don't have to type them in.
-        </Body>
+        <TitleBand plate="Step 1 of 4" title="Let's find what you already have.">
+          <Body dim>
+            Branches reads your transactions and works out your income, bills and loans, so you
+            don't have to type them in.
+          </Body>
+        </TitleBand>
         {bothJoined ? (
           <>
             <Button
@@ -107,8 +105,12 @@ export default function ConfirmScreen() {
 
   return (
     <Screen>
-      <Title>Does this look right?</Title>
-      <Body dim>Tap the check if it's right, the pencil to change it, or the cross to drop it.</Body>
+      <TitleBand plate="Step 1 of 4" title="Here's what we found.">
+        <Body dim>
+          We read 12 months of transactions. Tap the check if it's right, the pencil to change
+          it, or the cross to drop it.
+        </Body>
+      </TitleBand>
 
       <View style={styles.progressRow}>
         {progress.partners.map(p => (
@@ -136,7 +138,7 @@ export default function ConfirmScreen() {
 
       {pending.length > 0 ? (
         <Button
-          label={`Looks right — confirm ${pending.length} remaining`}
+          label={`Confirm the other ${pending.length}`}
           onPress={async () => {
             setError(null);
             try {
@@ -147,7 +149,7 @@ export default function ConfirmScreen() {
           }}
         />
       ) : (
-        <Button label="Next" onPress={() => router.push('/onboarding/gaps')} />
+        <Button label="Looks right, continue" onPress={() => router.push('/onboarding/gaps')} />
       )}
     </Screen>
   );
@@ -250,15 +252,15 @@ function ItemRow({ item, onError }: { item: Item; onError: (message: string) => 
       right={
         <View style={styles.rowActions}>
           <IconAction
-            glyph="✓"
+            icon="check"
             active={confirmed}
             activeColor={colors.accent}
             onPress={() => run(() => confirmItem({ itemId: item.id }))}
             label={`Confirm ${item.label}`}
           />
-          <IconAction glyph="✎" onPress={() => setEditing(true)} label={`Edit ${item.label}`} />
+          <IconAction icon="pencil" onPress={() => setEditing(true)} label={`Edit ${item.label}`} />
           <IconAction
-            glyph="✕"
+            icon="close"
             onPress={() => run(() => rejectItem({ itemId: item.id }))}
             label={`Remove ${item.label}`}
           />
@@ -269,13 +271,13 @@ function ItemRow({ item, onError }: { item: Item; onError: (message: string) => 
 }
 
 function IconAction({
-  glyph,
+  icon,
   onPress,
   active,
   activeColor,
   label,
 }: {
-  glyph: string;
+  icon: IconName;
   onPress: () => void;
   active?: boolean;
   activeColor?: string;
@@ -286,16 +288,13 @@ function IconAction({
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      style={({ pressed }) => [styles.iconAction, pressed && { opacity: 0.5 }]}
+      style={({ pressed }) => [
+        styles.iconAction,
+        active && styles.iconActionActive,
+        pressed && { opacity: 0.6 },
+      ]}
     >
-      <Text
-        style={[
-          styles.iconGlyph,
-          active && activeColor ? { color: activeColor } : null,
-        ]}
-      >
-        {glyph}
-      </Text>
+      <Icon name={icon} size={20} color={active && activeColor ? activeColor : colors.ink2} />
     </Pressable>
   );
 }
@@ -307,9 +306,21 @@ function messageOf(error: unknown): string {
 
 const styles = StyleSheet.create({
   progressRow: { flexDirection: 'row', gap: space.md, marginTop: space.md, flexWrap: 'wrap' },
-  rowActions: { flexDirection: 'row', gap: space.xs },
-  iconAction: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
-  iconGlyph: { ...typeScale.body, color: colors.textSecondary, fontSize: 18 },
+  rowActions: { flexDirection: 'row', gap: space.sm, alignItems: 'center' },
+  iconAction: {
+    width: 44,
+    height: 44,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.rule,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconActionActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.surfaceRaised,
+  },
   editBlock: {
     borderBottomWidth: 1,
     borderBottomColor: colors.hairline,
@@ -318,5 +329,5 @@ const styles = StyleSheet.create({
   editActions: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   waiting: { marginTop: space.lg },
   waitingAvatars: { flexDirection: 'row', gap: space.sm, marginTop: space.lg, marginBottom: space.sm },
-  code: { color: colors.accent, fontWeight: '600' },
+  code: { color: colors.accent, fontFamily: fonts.textSemi },
 });

@@ -11,7 +11,7 @@ import {
   Row,
   Screen,
   SectionHeader,
-  Title,
+  TitleBand,
 } from '../../src/components';
 import { deviceSlotLabel } from '../../src/device-slot';
 import { useHousehold, useHouseholdMembers, useMe } from '../../src/household';
@@ -82,7 +82,9 @@ export default function MenuScreen() {
 
   return (
     <Screen>
-      <Title>Menu</Title>
+      <TitleBand plate="No. 4 · Menu" title="Menu">
+        <Body dim>Starting over, and the details you need when you are driving two devices.</Body>
+      </TitleBand>
 
       <SectionHeader>Start over</SectionHeader>
       <Body dim>
@@ -95,11 +97,12 @@ export default function MenuScreen() {
         <Button
           label={busy ? 'Resetting…' : armed ? 'Tap again to reset everything' : 'Reset everything'}
           onPress={reset}
-          variant={armed ? 'primary' : 'secondary'}
+          icon="reset"
+          variant={armed ? 'dangerArmed' : 'danger'}
           disabled={busy || !me}
         />
         {armed && !busy ? (
-          <Caption color={colors.caution}>
+          <Caption color={colors.error}>
             This cannot be undone, and it resets your partner's screen too.
           </Caption>
         ) : (
@@ -107,7 +110,7 @@ export default function MenuScreen() {
         )}
       </View>
 
-      {error ? <Notice tone="warn">{error}</Notice> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
 
       <Divider />
 

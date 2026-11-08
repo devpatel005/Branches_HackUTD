@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
-import { colors, space, type as typeScale } from './theme';
+import { Icon } from './icons';
+import { colors, fonts, space, type as typeScale } from './theme';
 
 /**
  * Hold-to-confirm — 09 Design System#Signature components, and the moment the
@@ -164,7 +165,7 @@ export function ReadyRing({
             cx={CENTRE}
             cy={CENTRE}
             r={RADIUS}
-            stroke={colors.hairline}
+            stroke={colors.rule}
             strokeWidth={STROKE}
             fill="none"
           />
@@ -188,7 +189,11 @@ export function ReadyRing({
         </Svg>
 
         <View style={styles.label} pointerEvents="none">
-          <Text style={styles.labelTitle}>{committed ? '✓' : 'Hold'}</Text>
+          {committed ? (
+            <Icon name="check" size={40} color={colors.accent} strokeWidth={2} />
+          ) : (
+            <Text style={styles.labelTitle}>Hold</Text>
+          )}
           <Text style={styles.labelBranch} numberOfLines={2}>
             {branchName}
           </Text>
@@ -225,7 +230,7 @@ const styles = StyleSheet.create({
   wrapper: { alignItems: 'center', marginTop: space.lg },
   touch: { width: SIZE, height: SIZE, alignItems: 'center', justifyContent: 'center' },
   label: { position: 'absolute', alignItems: 'center', paddingHorizontal: space.lg },
-  labelTitle: { ...typeScale.title, color: colors.textPrimary },
+  labelTitle: { fontFamily: fonts.numeral, fontSize: 34, lineHeight: 40, color: colors.ink },
   labelBranch: {
     ...typeScale.caption,
     color: colors.textSecondary,

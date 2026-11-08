@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useReducer } from 'spacetimedb/react';
 import { reducers } from '@branches/bindings';
-import { Button, Caption, Chip, Field, Notice, SectionHeader } from './components';
+import { Button, Caption, Chip, Field, Notice } from './components';
+import { Icon, goalIcon } from './icons';
 import { Sheet } from './sheets';
-import { space } from './theme';
+import { colors, fonts, line, radius, space, type as typeScale } from './theme';
 
 /**
  * The shared goal picker — 10 Screens#Onboarding, step 4.
@@ -112,29 +113,37 @@ export function AddGoalSheet({
     >
       {!template ? (
         <>
-          <Caption>What are you saving for?</Caption>
+          <Text style={styles.label}>What are you saving for?</Text>
           <View style={styles.grid}>
             {GOAL_TEMPLATES.map(item => (
-              <Chip key={item.key} label={`${item.icon}  ${item.title}`} onPress={() => pick(item)} />
+              <Pressable
+                key={item.key}
+                accessibilityRole="button"
+                onPress={() => pick(item)}
+                style={({ pressed }) => [styles.tile, pressed && { backgroundColor: colors.surfaceHover }]}
+              >
+                <Icon name={goalIcon(item.icon)} size={26} color={colors.accent} />
+                <Text style={styles.tileLabel}>{item.title}</Text>
+              </Pressable>
             ))}
           </View>
         </>
       ) : (
         <>
-          <SectionHeader>Name</SectionHeader>
-          <Field value={title} onChangeText={setTitle} placeholder="Japan trip" />
+          <Text style={styles.label}>Name</Text>
+          <Field value={title} onChangeText={setTitle} placeholder="Japan trip" label="Goal name" />
 
-          <SectionHeader>Roughly what will it cost, in today's money?</SectionHeader>
-          <Field value={cost} onChangeText={setCost} keyboardType="number-pad" />
+          <Text style={styles.label}>Roughly what will it cost, in today's money?</Text>
+          <Field value={cost} onChangeText={setCost} keyboardType="number-pad" label="Cost in today's dollars" />
           <Caption>
             The projection grows this by inflation to the target date, so a rough figure is fine.
           </Caption>
 
-          <SectionHeader>By which plan year?</SectionHeader>
-          <Field value={year} onChangeText={setYear} keyboardType="number-pad" />
+          <Text style={styles.label}>By which plan year?</Text>
+          <Field value={year} onChangeText={setYear} keyboardType="number-pad" label="Plan year, 1 to 10" />
           <Caption>1 is the next twelve months; 10 is the end of the plan.</Caption>
 
-          <SectionHeader>How firm is it?</SectionHeader>
+          <Text style={styles.label}>How firm is it?</Text>
           <View style={styles.chips}>
             <Chip label="Must-have" selected={priority === 'must'} onPress={() => setPriority('must')} />
             <Chip label="Flexible" selected={priority === 'flex'} onPress={() => setPriority('flex')} />
@@ -143,7 +152,7 @@ export function AddGoalSheet({
             Must-have goals are funded first, and can't be made smaller later — only moved.
           </Caption>
 
-          {error ? <Notice tone="warn">{error}</Notice> : null}
+          {error ? <Notice tone="error">{error}</Notice> : null}
           <Button label="Add it" onPress={save} />
           <Button label="Pick something else" variant="quiet" onPress={reset} />
         </>
@@ -159,5 +168,18 @@ function messageOf(error: unknown): string {
 
 const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm, marginTop: space.md },
+  tile: {
+    width: '48%',
+    flexGrow: 1,
+    minHeight: 76,
+    borderWidth: line.hair,
+    borderColor: colors.rule,
+    borderRadius: radius,
+    padding: space.md,
+    gap: space.sm,
+    justifyContent: 'center',
+  },
+  tileLabel: { fontFamily: fonts.textMedium, fontSize: 15, color: colors.ink },
+  label: { ...typeScale.label, color: colors.ink, marginTop: space.lg },
   chips: { flexDirection: 'row', gap: space.sm, marginTop: space.sm },
 });

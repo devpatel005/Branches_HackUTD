@@ -1,17 +1,49 @@
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import {
+  useFonts,
+  Newsreader_400Regular,
+  Newsreader_400Regular_Italic,
+  Newsreader_500Medium,
+  Newsreader_600SemiBold,
+} from '@expo-google-fonts/newsreader';
+import {
+  SchibstedGrotesk_400Regular,
+  SchibstedGrotesk_500Medium,
+  SchibstedGrotesk_600SemiBold,
+} from '@expo-google-fonts/schibsted-grotesk';
 import { Platform, StyleSheet, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { BranchesSpacetimeProvider } from '../src/spacetime';
 import { useHousehold, useMe } from '../src/household';
-import { colors, WEB_MAX_WIDTH } from '../src/theme';
+import { COLUMN_MAX_WIDTH, colors, WEB_MAX_WIDTH } from '../src/theme';
 
 export default function RootLayout() {
+  const segments = useSegments();
+  // The type system (src/theme.ts `fonts`) names these faces directly. Until
+  // they load, show the page colour rather than a flash of fallback type.
+  const [fontsLoaded, fontError] = useFonts({
+    Newsreader_400Regular,
+    Newsreader_400Regular_Italic,
+    Newsreader_500Medium,
+    Newsreader_600SemiBold,
+    SchibstedGrotesk_400Regular,
+    SchibstedGrotesk_500Medium,
+    SchibstedGrotesk_600SemiBold,
+  });
+  if (!fontsLoaded && !fontError) return <View style={styles.shell} />;
+
+  // A phone app: on web it sits in a phone-width column. Only the live session
+  // widens on a laptop, so its three branch cards can sit side by side.
+  const columnWidth = segments[0] === 'session' ? WEB_MAX_WIDTH : COLUMN_MAX_WIDTH;
+
   return (
+    <SafeAreaProvider>
     <BranchesSpacetimeProvider>
       <StatusBar style="light" />
       <View style={styles.shell}>
-        <View style={styles.column}>
+        <View style={[styles.column, Platform.OS === 'web' ? { maxWidth: columnWidth } : null]}>
           <RouteGate />
           <Stack
             screenOptions={{
@@ -29,6 +61,7 @@ export default function RootLayout() {
         </View>
       </View>
     </BranchesSpacetimeProvider>
+    </SafeAreaProvider>
   );
 }
 
@@ -75,6 +108,8 @@ const styles = StyleSheet.create({
   column: {
     flex: 1,
     width: '100%',
-    ...(Platform.OS === 'web' ? { maxWidth: WEB_MAX_WIDTH } : null),
+    // A hairline either side on wide web screens, so the phone column reads as
+    // deliberate rather than as a page that forgot to stretch.
+    ...(Platform.OS === 'web' ? { borderLeftWidth: 1, borderRightWidth: 1, borderColor: colors.rule } : null),
   },
 });

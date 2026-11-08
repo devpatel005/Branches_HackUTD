@@ -32,7 +32,7 @@ export default function Root({ children }: { children: ReactNode }) {
 // flash of white before React mounts. Tabular figures so numbers don't jitter.
 const responsiveBackground = `
 body {
-  background-color: #000;
+  background-color: #0D1C1C;
   color-scheme: dark;
 }
 * {
